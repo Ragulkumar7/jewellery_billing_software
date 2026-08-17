@@ -36,6 +36,18 @@ const orderQuery = `query Orders($cursor: String) {
     } }
   }
 }`;
+// Fallback for stores whose plan does not approve the Customer object (PII):
+// orders still sync fully, just without customer details.
+const orderQueryNoCustomer = `query Orders($cursor: String) {
+  orders(first: 100, sortKey: CREATED_AT, reverse: true, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    edges { node {
+      id name createdAt displayFinancialStatus displayFulfillmentStatus
+      totalPriceSet { shopMoney { amount currencyCode } }
+      lineItems(first: 100) { edges { node { sku quantity } } }
+    } }
+  }
+}`;
 const locationsQuery = `query Locations { locations(first: 10) { edges { node { id name } } } }`;
 const productSetMutation = `mutation ProductSet($input: ProductSetInput!, $key: String!) {
   productSet(input: $input) @idempotent(key: $key) {
@@ -62,6 +74,7 @@ type ShopifyProductResponse = { products: { pageInfo: PageInfo; edges: { node: S
 type ShopifyCustomer = { id: string; displayName: string; firstName: string | null; lastName: string | null; email: string | null; phone: string | null; numberOfOrders: string; amountSpent: { amount: string } };
 type ShopifyCustomerResponse = { customers: { pageInfo: PageInfo; edges: { node: ShopifyCustomer }[] } };
 type ShopifyOrder = { id: string; name: string; createdAt: string; displayFinancialStatus: string; displayFulfillmentStatus: string | null; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }; customer: { id: string; displayName: string; email: string | null } | null; lineItems: { edges: { node: { sku: string | null; quantity: number } }[] } };
+type ShopifyOrderNoCustomer = Omit<ShopifyOrder, 'customer'>;
 type ShopifyOrderResponse = { orders: { pageInfo: PageInfo; edges: { node: ShopifyOrder }[] } };
 type ShopifyProductSetResponse = { productSet: { product: { id: string; title: string; status: string; variants: { edges: { node: { id: string; sku: string | null; price: string; inventoryItem: { id: string } | null } }[] } } | null; userErrors: { field: string[] | null; message: string }[] } };
 
@@ -579,9 +592,18 @@ async function upsertShopifyCustomer(query: (text: string, values?: unknown[]) =
 
 async function syncCustomers(client: ReturnType<typeof createShopifyClient>) {
   if (!pool) throw new ShopifyApiError('DATABASE_URL is not configured');
-  const customers = await fetchAllPages<ShopifyCustomer>((cursor) =>
-    client.query<ShopifyCustomerResponse>(customerQuery, cursor ? { cursor } : undefined).then((data) => ({ pageInfo: data.customers.pageInfo, edges: data.customers.edges })),
-  );
+  let customers: ShopifyCustomer[];
+  try {
+    customers = await fetchAllPages<ShopifyCustomer>((cursor) =>
+      client.query<ShopifyCustomerResponse>(customerQuery, cursor ? { cursor } : undefined).then((data) => ({ pageInfo: data.customers.pageInfo, edges: data.customers.edges })),
+    );
+  } catch (error) {
+    if (!isCustomerPiiError(error)) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    await insertFlag({ direction: 'import', category: 'customer_pii_blocked', severity: 'Warning', remarks: `Customer sync blocked by store plan: ${message.slice(0, 300)}` });
+    await insertLog({ type: 'Customer', name: 'Customer reconciliation', status: 'Flagged', error: message.slice(0, 300), direction: 'import', operation: 'reconcile_customers_blocked' });
+    return { source: 'Shopify', shopifyRecords: 0, linked: 0, created: 0, blocked: true, reason: 'Customer PII is not approved on this store plan; only products, inventory and order (non-PII) syncs are available' };
+  }
   let linked = 0;
   let created = 0;
   for (const customer of customers) {
@@ -602,6 +624,36 @@ async function syncCustomers(client: ReturnType<typeof createShopifyClient>) {
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+function isCustomerPiiError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not approved to access the Customer object|protected customer data/i.test(message);
+}
+
+async function getOrCreateWalkInCustomer(): Promise<string> {
+  if (!pool) throw new ShopifyApiError('DATABASE_URL is not configured');
+  const name = 'Online Sale';
+  const existing = (await pool.query('select id from customers where lower(name) = lower($1) and shopify_customer_id is null limit 1', [name])).rows[0];
+  if (existing) return existing.id;
+  const { rows } = await pool.query('insert into customers (name, mobile, email, status) values ($1, null, null, $2) returning id', [name, 'Active']);
+  return rows[0].id;
+}
+
+async function fetchAllShopifyOrders(client: ReturnType<typeof createShopifyClient>) {
+  try {
+    const orders = await fetchAllPages<ShopifyOrder>((cursor) =>
+      client.query<ShopifyOrderResponse>(orderQuery, cursor ? { cursor } : undefined).then((data) => ({ pageInfo: data.orders.pageInfo, edges: data.orders.edges })),
+    );
+    return { orders, customerAvailable: true };
+  } catch (error) {
+    if (!isCustomerPiiError(error)) throw error;
+    await insertLog({ type: 'Order', name: 'Order import', status: 'Flagged', error: 'Customer PII not approved on this store plan; importing orders without customer details', direction: 'import', operation: 'orders_customer_blocked' });
+    const orders = await fetchAllPages<ShopifyOrderNoCustomer>((cursor) =>
+      client.query<{ orders: { pageInfo: PageInfo; edges: { node: ShopifyOrderNoCustomer }[] } }>(orderQueryNoCustomer, cursor ? { cursor } : undefined).then((data) => ({ pageInfo: data.orders.pageInfo, edges: data.orders.edges })),
+    );
+    return { orders: orders.map((order) => ({ ...order, customer: null })), customerAvailable: false };
+  }
 }
 
 function computeTotals(lines: { unitPrice: number; quantity: number; gstRate: number }[], discount: number) {
@@ -641,16 +693,19 @@ async function importShopifyOrderAsDraft(order: ImportableShopifyOrder) {
   if (!pool) throw new ShopifyApiError('DATABASE_URL is not configured');
   const already = (await pool.query('select id from sales_orders where shopify_order_id = $1 limit 1', [order.id])).rows[0];
   if (already) return { created: false, reason: 'already_exists' };
-  if (!order.customer) {
-    await insertLog({ type: 'Order', name: order.name, status: 'Flagged', error: 'Shopify order has no customer; skipped', direction: 'import', operation: 'order_no_customer', shopifyId: order.id });
-    return { created: false, reason: 'no_customer' };
+  let customerId: string;
+  if (order.customer) {
+    const customerOutcome = await upsertShopifyCustomer((text, values) => pool!.query(text, values), {
+      shopifyCustomerId: order.customer.id,
+      name: order.customer.displayName || order.customer.email || 'Shopify Customer',
+      email: order.customer.email,
+      mobile: null,
+    });
+    customerId = customerOutcome.target;
+  } else {
+    customerId = await getOrCreateWalkInCustomer();
+    await insertLog({ type: 'Order', name: order.name, status: 'Synced', error: 'Customer details unavailable; used Online Sale customer', direction: 'import', operation: 'order_customer_fallback', shopifyId: order.id });
   }
-  const customerOutcome = await upsertShopifyCustomer((text, values) => pool!.query(text, values), {
-    shopifyCustomerId: order.customer.id,
-    name: order.customer.displayName || order.customer.email || 'Shopify Customer',
-    email: order.customer.email,
-    mobile: null,
-  });
   const rate = await getSilverRate();
   const priced: { product: any; unitPrice: number; quantity: number; lineTotal: number }[] = [];
   const unmatched: string[] = [];
@@ -671,7 +726,7 @@ async function importShopifyOrderAsDraft(order: ImportableShopifyOrder) {
   const orderResult = await pool.query(
     `insert into sales_orders (customer_id, status, grand_total, subtotal, discount, gst_amount, round_off, silver_rate, notes, source, shopify_order_id, created_by)
      values ($1, 'Draft', $2, $3, $4, $5, $6, $7, $8, 'Shopify', $9, null) returning *`,
-    [customerOutcome.target, totals.grandTotal, totals.subtotal, totals.discount, totals.gstAmount, totals.roundOff, rate, `Imported from Shopify order ${order.name}`, order.id],
+    [customerId, totals.grandTotal, totals.subtotal, totals.discount, totals.gstAmount, totals.roundOff, rate, `Imported from Shopify order ${order.name}`, order.id],
   );
   const salesOrder = orderResult.rows[0];
   for (const line of priced) {
@@ -693,9 +748,7 @@ async function importShopifyOrderAsDraft(order: ImportableShopifyOrder) {
 
 async function syncOrders(client: ReturnType<typeof createShopifyClient>) {
   if (!pool) throw new ShopifyApiError('DATABASE_URL is not configured');
-  const orders = await fetchAllPages<ShopifyOrder>((cursor) =>
-    client.query<ShopifyOrderResponse>(orderQuery, cursor ? { cursor } : undefined).then((data) => ({ pageInfo: data.orders.pageInfo, edges: data.orders.edges })),
-  );
+  const { orders, customerAvailable } = await fetchAllShopifyOrders(client);
   let created = 0;
   let skipped = 0;
   for (const order of orders) {
@@ -710,7 +763,7 @@ async function syncOrders(client: ReturnType<typeof createShopifyClient>) {
     else skipped += 1;
   }
   await insertLog({ type: 'Order', name: 'Order import', status: 'Synced', direction: 'import', operation: 'import_orders' });
-  return { source: 'Shopify', imported: orders.length, created, skipped };
+  return { source: 'Shopify', imported: orders.length, created, skipped, customerAvailable };
 }
 
 async function reconcileProducts(client: ReturnType<typeof createShopifyClient>) {
