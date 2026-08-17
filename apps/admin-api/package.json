@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "db:migrate": "tsx src/db/migrate.ts",
+    "register-webhooks": "tsx scripts/register-webhooks.ts",
     "build": "tsup src/index.ts --format esm",
     "start": "node dist/index.js",
     "check-types": "tsc --noEmit"
