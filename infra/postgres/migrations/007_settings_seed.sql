@@ -1,0 +1,47 @@
+-- Settings module: add description column and seed default settings.
+
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS description text;
+
+INSERT INTO settings (setting_key, setting_group, setting_value, description) VALUES
+  ('business_name', 'Business', '{"value":"Opal Line Jewelry"}', 'Legal business name shown on invoices and reports'),
+  ('business_logo', 'Business', '{"value":null}', 'Logo URL used on invoices and letterhead'),
+  ('business_address', 'Business', '{"value":"123, Main Street, Coimbatore, Tamil Nadu 641001"}', 'Registered business address'),
+  ('business_contact', 'Business', '{"value":"+91 98765 43210"}', 'Primary contact phone number'),
+  ('business_gst_number', 'Business', '{"value":"33ABCDE1234F1Z5"}', 'GST registration number'),
+  ('invoice_number_format', 'Invoice', '{"value":"SI-{YYYY}-{SEQ}"}', 'Invoice number format with placeholders'),
+  ('invoice_starting_number', 'Invoice', '{"value":1001}', 'Starting sequence number for invoices'),
+  ('invoice_date_format', 'Invoice', '{"value":"DD/MM/YYYY"}', 'Date format used on printed invoices'),
+  ('invoice_terms', 'Invoice', '{"value":"Goods once sold will not be taken back. Prices are subject to silver rate."}', 'Default terms and conditions on invoices'),
+  ('invoice_print_format', 'Invoice', '{"value":"A4"}', 'Print format for invoices (A4 / Thermal / Custom)'),
+  ('tax_gst_configuration', 'Tax', '{"value":"CGST+SGST"}', 'GST configuration (CGST+SGST / IGST)'),
+  ('tax_cgst_rate', 'Tax', '{"value":1.5}', 'CGST rate percentage'),
+  ('tax_sgst_rate', 'Tax', '{"value":1.5}', 'SGST rate percentage'),
+  ('tax_igst_rate', 'Tax', '{"value":3}', 'IGST rate percentage'),
+  ('tax_inclusive_exclusive', 'Tax', '{"value":false}', 'Whether prices include GST'),
+  ('payment_methods', 'Payment', '{"value":["Cash","Card","UPI","Bank Transfer"]}', 'Supported payment methods'),
+  ('inventory_stock_rules', 'Inventory', '{"value":"Allow negative stock"}', 'Stock control rules'),
+  ('inventory_low_stock_threshold', 'Inventory', '{"value":5}', 'Default low stock threshold'),
+  ('inventory_adjustment_rules', 'Inventory', '{"value":"Require approval"}', 'Stock adjustment approval rules'),
+  ('inventory_units', 'Inventory', '{"value":["pcs","gm"]}', 'Inventory units of measure'),
+  ('silver_rate_default_purity', 'Silver Rate', '{"value":"92.5"}', 'Default silver purity'),
+  ('silver_rate_unit', 'Silver Rate', '{"value":"per gram"}', 'Rate unit of measure'),
+  ('silver_rate_pricing_calculation', 'Silver Rate', '{"value":"(rate + making) x weight"}', 'Pricing calculation formula'),
+  ('silver_rate_rounding', 'Silver Rate', '{"value":2}', 'Decimal places for rate rounding'),
+  ('silver_rate_approval', 'Silver Rate', '{"value":false}', 'Require approval before rate change takes effect'),
+  ('silver_rate_shopify_publishing', 'Silver Rate', '{"value":true}', 'Auto-publish rate changes to Shopify'),
+  ('shopify_connection_status', 'Shopify', '{"value":"Connected"}', 'Shopify connection status'),
+  ('shopify_sync_preferences', 'Shopify', '{"value":"Manual"}', 'Sync mode (Manual / Automatic)'),
+  ('shopify_product_sync', 'Shopify', '{"value":true}', 'Sync products to Shopify'),
+  ('shopify_inventory_sync', 'Shopify', '{"value":true}', 'Sync inventory levels to Shopify'),
+  ('shopify_order_sync', 'Shopify', '{"value":true}', 'Import orders from Shopify'),
+  ('shopify_customer_sync', 'Shopify', '{"value":true}', 'Sync customers to Shopify'),
+  ('shopify_price_sync', 'Shopify', '{"value":true}', 'Sync product prices to Shopify'),
+  ('notification_low_stock', 'Notifications', '{"value":true}', 'Notify when stock falls below threshold'),
+  ('notification_sync_failures', 'Notifications', '{"value":true}', 'Notify on Shopify sync failures'),
+  ('notification_payment_due', 'Notifications', '{"value":true}', 'Notify on payment due dates'),
+  ('notification_delivery', 'Notifications', '{"value":false}', 'Notify on delivery updates'),
+  ('notification_approvals', 'Notifications', '{"value":true}', 'Notify on pending approvals'),
+  ('notification_silver_rate', 'Notifications', '{"value":true}', 'Notify on silver rate changes')
+ON CONFLICT (setting_key) DO UPDATE SET
+  setting_group = EXCLUDED.setting_group,
+  description = EXCLUDED.description;

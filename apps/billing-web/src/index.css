@@ -1,0 +1,15 @@
+@import 'tailwindcss';
+
+:root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1d2945; background: #f7f8fc; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input { font: inherit; }
+.bg-orange { background: #ff921e; }
+.bg-navy { background: #17244c; }
+.bg-teal { background: #229d8c; }
+.bg-blue { background: #2f6fe5; }
+.bg-violet { background: #7651cb; }
+.bg-cyan { background: #15aeb7; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-thumb { background: #d9dce7; border-radius: 999px; }
+@media (max-width: 900px) { .ml-\[190px\] { margin-left: 0; } }

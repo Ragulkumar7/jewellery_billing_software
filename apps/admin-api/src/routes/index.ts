@@ -1,0 +1,29 @@
+import { Router, type Router as RouterType } from "express";
+import { healthRouter } from "./health.js";
+import { catalogRouter } from "./catalog.js";
+import { customersRouter } from "./customers.js";
+import { salesRouter } from "./sales.js";
+import { identityRouter } from "./identity.js";
+import { auditRouter } from "./audit.js";
+import { shopifyRouter, shopifyWebhookRouter } from "./shopify.js";
+import { silverRateRouter } from "./silver-rate.js";
+import { settingsRouter } from "./settings.js";
+import { purchasesRouter } from "./purchases.js";
+import { accountsRouter } from "./accounts.js";
+import { reportsRouter } from "./reports.js";
+
+export const routes: RouterType = Router();
+
+routes.use(healthRouter);
+routes.use(catalogRouter);
+routes.use(customersRouter);
+routes.use(salesRouter);
+routes.use(identityRouter);
+routes.use(auditRouter);
+routes.use(shopifyRouter);
+routes.use(silverRateRouter);
+routes.use(settingsRouter);
+routes.use(purchasesRouter);
+routes.use(accountsRouter);
+routes.use(reportsRouter);
+routes.use('/api/shopify/webhooks', shopifyWebhookRouter);
