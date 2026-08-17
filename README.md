@@ -71,8 +71,25 @@ SHOPIFY_WEBHOOK_SECRET=...
 
 The access token stays on the API server. The API exposes `GET /api/shopify/status`,
 `POST /api/shopify/sync/:scope`, and signed webhook endpoints under
-`/api/shopify/webhooks/:topic`. Register Shopify webhook topics for orders,
-customers, products, and inventory against the public API URL.
+`/api/shopify/webhooks/:topic`.
+
+When the API is deployed to a public HTTPS server, register the webhook topics
+in one command (products and inventory only — customer-protected topics require
+a store plan that approves customer PII):
+
+```bash
+PUBLIC_API_URL=https://billing.opalline.in pnpm --filter admin-api register-webhooks
+```
+
+See `docs/shopify-webhooks.md` for the full topic list and manual registration.
+
+### Plan limitations
+
+On store plans that do not approve the Shopify `Customer` object (PII), the
+customer full sync returns `blocked: true` (never crashes), order imports fall
+back to a query without customer details, and Draft sales orders are created
+under an "Online Sale" walk-in customer. Products, inventory, and non-PII order
+data sync fully on any plan.
 
 ## Scripts
 
