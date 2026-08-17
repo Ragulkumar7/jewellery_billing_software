@@ -32,6 +32,7 @@ const orderQuery = `query Orders($cursor: String) {
       id name createdAt displayFinancialStatus displayFulfillmentStatus
       totalPriceSet { shopMoney { amount currencyCode } }
       customer { id displayName email }
+      lineItems(first: 100) { edges { node { sku quantity } } }
     } }
   }
 }`;
@@ -60,7 +61,7 @@ type ShopifyProduct = { id: string; title: string; status: string; variants: { e
 type ShopifyProductResponse = { products: { pageInfo: PageInfo; edges: { node: ShopifyProduct }[] } };
 type ShopifyCustomer = { id: string; displayName: string; firstName: string | null; lastName: string | null; email: string | null; phone: string | null; numberOfOrders: string; amountSpent: { amount: string } };
 type ShopifyCustomerResponse = { customers: { pageInfo: PageInfo; edges: { node: ShopifyCustomer }[] } };
-type ShopifyOrder = { id: string; name: string; createdAt: string; displayFinancialStatus: string; displayFulfillmentStatus: string | null; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }; customer: { id: string; displayName: string; email: string | null } | null };
+type ShopifyOrder = { id: string; name: string; createdAt: string; displayFinancialStatus: string; displayFulfillmentStatus: string | null; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }; customer: { id: string; displayName: string; email: string | null } | null; lineItems: { edges: { node: { sku: string | null; quantity: number } }[] } };
 type ShopifyOrderResponse = { orders: { pageInfo: PageInfo; edges: { node: ShopifyOrder }[] } };
 type ShopifyProductSetResponse = { productSet: { product: { id: string; title: string; status: string; variants: { edges: { node: { id: string; sku: string | null; price: string; inventoryItem: { id: string } | null } }[] } } | null; userErrors: { field: string[] | null; message: string }[] } };
 
@@ -531,21 +532,163 @@ async function syncInventory(client: ReturnType<typeof createShopifyClient>) {
   return { source: 'Shopify', selectedLocation: selectedLocation ?? null, locations, shopifyRecords: shopifyProducts.length, corrected, mismatches, mismatchCount: mismatches, records: records.slice(0, 200) };
 }
 
+// Normalize a Shopify customer into the ERP: upsert the Shopify mirror row, then
+// link to an existing ERP customer (by Shopify id, then email/mobile) or create a
+// full ERP customer so Shopify customers are immediately invoicable.
+type CustomerSyncInput = {
+  shopifyCustomerId: string;
+  name: string;
+  email: string | null;
+  mobile: string | null;
+  totalOrders?: number;
+  totalSpent?: number;
+};
+
+async function upsertShopifyCustomer(query: (text: string, values?: unknown[]) => Promise<{ rows: any[] }>, input: CustomerSyncInput, shopifyStatus = 'Active') {
+  await query(
+    `insert into shopify_customers (shopify_customer_id, name, mobile, email, total_orders, total_spent, synced_at)
+     values ($1,$2,$3,$4,$5,$6,now())
+     on conflict (shopify_customer_id) do update set name = excluded.name, mobile = excluded.mobile, email = excluded.email, total_orders = excluded.total_orders, total_spent = excluded.total_spent, synced_at = now()`,
+    [input.shopifyCustomerId, input.name, input.mobile, input.email, input.totalOrders ?? 0, input.totalSpent ?? 0],
+  );
+  let target = (await query('select id from customers where shopify_customer_id = $1 limit 1', [input.shopifyCustomerId])).rows[0]?.id ?? null;
+  let linked = false;
+  let created = false;
+  if (target) {
+    linked = true;
+  } else {
+    const byIdentity = (await query("select id from customers where ($1 <> '' and lower(email) = lower($1)) or ($2 <> '' and mobile = $2) limit 1", [input.email ?? '', input.mobile ?? ''])).rows[0];
+    if (byIdentity) {
+      await query("update customers set shopify_customer_id = $1, shopify_status = $2, last_shopify_sync_at = now() where id = $3 and shopify_customer_id is null", [input.shopifyCustomerId, shopifyStatus, byIdentity.id]);
+      target = byIdentity.id;
+      linked = true;
+    }
+  }
+  if (!target) {
+    const result = await query(
+      `insert into customers (name, mobile, email, shopify_customer_id, shopify_status, last_shopify_sync_at)
+       values ($1,$2,$3,$4,$5,now()) returning id`,
+      [input.name, input.mobile, input.email, input.shopifyCustomerId, shopifyStatus],
+    );
+    target = result.rows[0].id;
+    created = true;
+  }
+  await query("update customers set shopify_status = $1, last_shopify_sync_at = now() where id = $2", [shopifyStatus, target]);
+  return { target, linked, created };
+}
+
 async function syncCustomers(client: ReturnType<typeof createShopifyClient>) {
   if (!pool) throw new ShopifyApiError('DATABASE_URL is not configured');
   const customers = await fetchAllPages<ShopifyCustomer>((cursor) =>
     client.query<ShopifyCustomerResponse>(customerQuery, cursor ? { cursor } : undefined).then((data) => ({ pageInfo: data.customers.pageInfo, edges: data.customers.edges })),
   );
   let linked = 0;
+  let created = 0;
   for (const customer of customers) {
-    const name = customer.displayName || [customer.firstName, customer.lastName].filter(Boolean).join(' ') || 'Shopify Customer';
-    await pool.query(`insert into shopify_customers (shopify_customer_id, name, mobile, email, total_orders, total_spent, synced_at) values ($1,$2,$3,$4,$5,$6,now()) on conflict (shopify_customer_id) do update set name = excluded.name, mobile = excluded.mobile, email = excluded.email, total_orders = excluded.total_orders, total_spent = excluded.total_spent, synced_at = now()`, [customer.id, name, customer.phone, customer.email, Number(customer.numberOfOrders), Number(customer.amountSpent.amount)]);
-    await pool.query('update customers set shopify_status = $1, last_shopify_sync_at = now() where shopify_customer_id = $2', ['Active', customer.id]);
-    const match = await pool.query('select id from customers where ($1 <> \'\' and lower(email) = lower($1)) or ($2 <> \'\' and mobile = $2) limit 1', [customer.email ?? '', customer.phone ?? '']);
-    if (match.rows[0]) { await pool.query('update customers set shopify_customer_id = $1, shopify_status = $2, last_shopify_sync_at = now() where id = $3 and shopify_customer_id is null', [customer.id, 'Active', match.rows[0].id]); linked += 1; }
+    const outcome = await upsertShopifyCustomer((text, values) => pool!.query(text, values), {
+      shopifyCustomerId: customer.id,
+      name: customer.displayName || [customer.firstName, customer.lastName].filter(Boolean).join(' ') || 'Shopify Customer',
+      email: customer.email,
+      mobile: customer.phone,
+      totalOrders: Number(customer.numberOfOrders),
+      totalSpent: Number(customer.amountSpent.amount),
+    });
+    if (outcome.linked) linked += 1;
+    if (outcome.created) created += 1;
   }
   await insertLog({ type: 'Customer', name: 'Customer reconciliation', status: 'Synced', direction: 'import', operation: 'reconcile_customers' });
-  return { source: 'Shopify', shopifyRecords: customers.length, linked };
+  return { source: 'Shopify', shopifyRecords: customers.length, linked, created };
+}
+
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+function computeTotals(lines: { unitPrice: number; quantity: number; gstRate: number }[], discount: number) {
+  const itemized = lines.map((l) => ({ ...l, lineTotal: round2(l.unitPrice * l.quantity) }));
+  const grossSubtotal = itemized.reduce((s, l) => s + l.lineTotal, 0);
+  const safeDiscount = round2(Math.min(Math.max(0, discount), grossSubtotal));
+  let subtotal = 0;
+  let gstAmount = 0;
+  const allocated = itemized.map((l) => {
+    const alloc = grossSubtotal ? round2(safeDiscount * l.lineTotal / grossSubtotal) : 0;
+    const taxable = round2(l.lineTotal - alloc);
+    const lineGst = round2(taxable * (l.gstRate / 100));
+    subtotal += taxable;
+    gstAmount += lineGst;
+    return { ...l, lineDiscount: alloc, lineGst };
+  });
+  subtotal = round2(subtotal);
+  gstAmount = round2(gstAmount);
+  const beforeRound = subtotal + gstAmount;
+  const grandTotal = Math.round(beforeRound);
+  const roundOff = round2(grandTotal - beforeRound);
+  return { lines: allocated, subtotal, discount: safeDiscount, gstAmount, roundOff, grandTotal };
+}
+
+// Create an ERP Draft sales order from a Shopify order. Line items are matched
+// by SKU against the active product master and priced by the ERP formula (never
+// Shopify prices). Drafts do not touch stock; staff confirm and convert them.
+type ShopifyOrderLine = { sku: string | null; quantity: number };
+type ImportableShopifyOrder = {
+  id: string;
+  name: string;
+  customer: { id: string; displayName: string; email: string | null } | null;
+  lineItems: ShopifyOrderLine[];
+};
+
+async function importShopifyOrderAsDraft(order: ImportableShopifyOrder) {
+  if (!pool) throw new ShopifyApiError('DATABASE_URL is not configured');
+  const already = (await pool.query('select id from sales_orders where shopify_order_id = $1 limit 1', [order.id])).rows[0];
+  if (already) return { created: false, reason: 'already_exists' };
+  if (!order.customer) {
+    await insertLog({ type: 'Order', name: order.name, status: 'Flagged', error: 'Shopify order has no customer; skipped', direction: 'import', operation: 'order_no_customer', shopifyId: order.id });
+    return { created: false, reason: 'no_customer' };
+  }
+  const customerOutcome = await upsertShopifyCustomer((text, values) => pool!.query(text, values), {
+    shopifyCustomerId: order.customer.id,
+    name: order.customer.displayName || order.customer.email || 'Shopify Customer',
+    email: order.customer.email,
+    mobile: null,
+  });
+  const rate = await getSilverRate();
+  const priced: { product: any; unitPrice: number; quantity: number; lineTotal: number }[] = [];
+  const unmatched: string[] = [];
+  for (const line of order.lineItems) {
+    const sku = String(line.sku ?? '').trim();
+    if (!sku) { unmatched.push('(no sku)'); continue; }
+    const product = (await pool.query('select * from products where lower(sku) = lower($1) limit 1', [sku])).rows[0];
+    if (!product || product.status !== 'Active') { unmatched.push(sku); continue; }
+    const quantity = Math.max(1, Math.floor(Number(line.quantity) || 0));
+    const unitPrice = round2(Number(product.net_weight) * rate + Number(product.making_charge) + Number(product.stone_charge) + Number(product.other_charge));
+    priced.push({ product, unitPrice, quantity, lineTotal: round2(unitPrice * quantity) });
+  }
+  if (!priced.length) {
+    await insertLog({ type: 'Order', name: order.name, status: 'Flagged', error: `No line items matched active ERP products by SKU${unmatched.length ? ` (${unmatched.join(', ')})` : ''}`, direction: 'import', operation: 'order_unmatched', shopifyId: order.id });
+    return { created: false, reason: 'no_matching_lines' };
+  }
+  const totals = computeTotals(priced.map((l) => ({ unitPrice: l.unitPrice, quantity: l.quantity, gstRate: l.product.gst_rate })), 0);
+  const orderResult = await pool.query(
+    `insert into sales_orders (customer_id, status, grand_total, subtotal, discount, gst_amount, round_off, silver_rate, notes, source, shopify_order_id, created_by)
+     values ($1, 'Draft', $2, $3, $4, $5, $6, $7, $8, 'Shopify', $9, null) returning *`,
+    [customerOutcome.target, totals.grandTotal, totals.subtotal, totals.discount, totals.gstAmount, totals.roundOff, rate, `Imported from Shopify order ${order.name}`, order.id],
+  );
+  const salesOrder = orderResult.rows[0];
+  for (const line of priced) {
+    const p = line.product;
+    await pool.query(
+      `insert into sales_order_items (order_id, product_id, sku, name, purity, gross_weight, net_weight, stone_weight, silver_rate, making_charge, stone_charge, other_charge, gst_rate, quantity, unit_price, line_total)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      [salesOrder.id, p.id, p.sku, p.name, p.purity, p.gross_weight, p.net_weight, p.stone_weight, rate, p.making_charge, p.stone_charge, p.other_charge, p.gst_rate, line.quantity, line.unitPrice, line.lineTotal],
+    );
+  }
+  if (unmatched.length) {
+    await insertFlag({ direction: 'import', category: 'order_unmatched_items', severity: 'Warning', shopifyValue: unmatched.join(', '), remarks: `Shopify order ${order.name} had line items that did not match active ERP products by SKU.` });
+    await insertLog({ type: 'Order', name: order.name, status: 'Flagged', error: `Draft created with ${priced.length} matched line(s); unmatched SKUs: ${unmatched.join(', ')}`, direction: 'import', operation: 'order_draft_partial', shopifyId: order.id });
+  } else {
+    await insertLog({ type: 'Order', name: order.name, status: 'Synced', direction: 'import', operation: 'order_draft_created', shopifyId: order.id });
+  }
+  return { created: true, orderNumber: salesOrder.order_number };
 }
 
 async function syncOrders(client: ReturnType<typeof createShopifyClient>) {
@@ -553,11 +696,21 @@ async function syncOrders(client: ReturnType<typeof createShopifyClient>) {
   const orders = await fetchAllPages<ShopifyOrder>((cursor) =>
     client.query<ShopifyOrderResponse>(orderQuery, cursor ? { cursor } : undefined).then((data) => ({ pageInfo: data.orders.pageInfo, edges: data.orders.edges })),
   );
+  let created = 0;
+  let skipped = 0;
   for (const order of orders) {
     await pool.query(`insert into shopify_orders (shopify_order_id, order_number, customer_name, customer_email, order_date, amount, currency, payment_status, fulfillment_status, sync_status, synced_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Imported',now()) on conflict (shopify_order_id) do update set customer_name = excluded.customer_name, customer_email = excluded.customer_email, amount = excluded.amount, payment_status = excluded.payment_status, fulfillment_status = excluded.fulfillment_status, sync_status = excluded.sync_status, synced_at = now()`, [order.id, order.name, order.customer?.displayName ?? 'Shopify Customer', order.customer?.email ?? null, order.createdAt, Number(order.totalPriceSet.shopMoney.amount), order.totalPriceSet.shopMoney.currencyCode, order.displayFinancialStatus, order.displayFulfillmentStatus]);
+    const outcome = await importShopifyOrderAsDraft({
+      id: order.id,
+      name: order.name,
+      customer: order.customer,
+      lineItems: order.lineItems.edges.map((edge) => edge.node),
+    });
+    if (outcome.created) created += 1;
+    else skipped += 1;
   }
   await insertLog({ type: 'Order', name: 'Order import', status: 'Synced', direction: 'import', operation: 'import_orders' });
-  return { source: 'Shopify', imported: orders.length };
+  return { source: 'Shopify', imported: orders.length, created, skipped };
 }
 
 async function reconcileProducts(client: ReturnType<typeof createShopifyClient>) {
@@ -635,13 +788,34 @@ function verifyWebhook(req: Request) {
   return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
 }
 
-async function handleCustomerWebhook(payload: Record<string, any>) {
-  if (!pool || !payload.admin_graphql_api_id) return;
-  const customer = payload;
-  const name = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || 'Shopify Customer';
-  await pool.query(`insert into shopify_customers (shopify_customer_id, name, mobile, email, synced_at) values ($1,$2,$3,$4,now()) on conflict (shopify_customer_id) do update set name = excluded.name, mobile = excluded.mobile, email = excluded.email, synced_at = now()`, [customer.admin_graphql_api_id, name, customer.phone ?? null, customer.email ?? null]);
-  const shopifyStatus = customer.deleted_at || customer.archived ? 'Inactive' : 'Active';
-  await pool.query('update customers set shopify_status = $1, last_shopify_sync_at = now() where shopify_customer_id = $2', [shopifyStatus, customer.admin_graphql_api_id]);
+async function handleCustomerWebhook(topic: string, payload: Record<string, any>) {
+  if (!pool) return;
+  const shopifyCustomerId = payload.admin_graphql_api_id ?? (payload.id ? `gid://shopify/Customer/${payload.id}` : null);
+  if (!shopifyCustomerId) {
+    await insertLog({ type: 'Customer', name: payload.email || payload.phone || 'unknown', status: 'Flagged', error: 'Customer webhook without an id', direction: 'import', operation: 'customer_unlinked' });
+    return;
+  }
+  const name = [payload.first_name, payload.last_name].filter(Boolean).join(' ') || payload.email || 'Shopify Customer';
+
+  if (topic.endsWith('/delete') || Boolean(payload.deleted_at)) {
+    await pool.query('delete from shopify_customers where shopify_customer_id = $1', [shopifyCustomerId]);
+    const match = await pool.query('select id from customers where shopify_customer_id = $1 limit 1', [shopifyCustomerId]);
+    if (match.rows[0]) {
+      await pool.query("update customers set shopify_status = 'Inactive', last_shopify_sync_at = now() where id = $1", [match.rows[0].id]);
+      await insertFlag({ direction: 'import', category: 'customer_deleted', severity: 'Info', remarks: `Customer deleted in Shopify (${name}).` });
+    }
+    await insertLog({ type: 'Customer', name, status: 'Synced', direction: 'import', operation: 'webhook_customer_delete', shopifyId: shopifyCustomerId });
+    return;
+  }
+
+  const shopifyStatus = payload.archived ? 'Inactive' : 'Active';
+  const outcome = await upsertShopifyCustomer((text, values) => pool!.query(text, values), {
+    shopifyCustomerId,
+    name,
+    email: payload.email ?? null,
+    mobile: payload.phone ?? null,
+  }, shopifyStatus);
+  await insertLog({ type: 'Customer', name, status: 'Synced', direction: 'import', operation: outcome.created ? 'webhook_customer_created' : 'webhook_customer_updated', shopifyId: shopifyCustomerId });
 }
 
 async function handleProductWebhook(topic: string, payload: Record<string, any>) {
@@ -731,8 +905,17 @@ async function handleOrderWebhook(payload: Record<string, any>) {
   const orderId = payload.admin_graphql_api_id ?? (payload.id ? `gid://shopify/Order/${payload.id}` : null);
   if (!orderId) return;
   const customer = payload.customer ?? null;
+  const customerId = customer?.admin_graphql_api_id ?? (customer?.id ? `gid://shopify/Customer/${customer.id}` : null);
   await pool.query(`insert into shopify_orders (shopify_order_id, order_number, customer_name, customer_email, order_date, amount, currency, payment_status, fulfillment_status, sync_status, synced_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Imported',now()) on conflict (shopify_order_id) do update set customer_name = excluded.customer_name, customer_email = excluded.customer_email, amount = excluded.amount, payment_status = excluded.payment_status, fulfillment_status = excluded.fulfillment_status, sync_status = excluded.sync_status, synced_at = now()`, [orderId, String(payload.name ?? orderId), customer?.display_name ?? customer?.email ?? 'Shopify Customer', customer?.email ?? null, String(payload.created_at ?? new Date().toISOString()), Number(payload.total_price || 0), String(payload.currency ?? 'INR'), String(payload.financial_status ?? ''), String(payload.fulfillment_status ?? '')]);
-  await insertLog({ type: 'Order', name: String(payload.name ?? orderId), status: 'Synced', direction: 'import', operation: 'webhook_order', shopifyId: orderId });
+  const outcome = await importShopifyOrderAsDraft({
+    id: orderId,
+    name: String(payload.name ?? orderId),
+    customer: customerId
+      ? { id: customerId, displayName: customer?.display_name ?? customer?.email ?? 'Shopify Customer', email: customer?.email ?? null }
+      : null,
+    lineItems: (Array.isArray(payload.line_items) ? payload.line_items : []).map((line: Record<string, any>) => ({ sku: line.sku ?? null, quantity: Number(line.quantity) || 0 })),
+  });
+  await insertLog({ type: 'Order', name: String(payload.name ?? orderId), status: outcome.created ? 'Synced' : 'Flagged', error: outcome.created ? null : `Draft not created (${outcome.reason})`, direction: 'import', operation: outcome.created ? 'webhook_order_draft_created' : 'webhook_order_skipped', shopifyId: orderId });
 }
 
 async function handleWebhook(req: Request, res: Response, next: (error?: unknown) => void) {
@@ -745,7 +928,7 @@ async function handleWebhook(req: Request, res: Response, next: (error?: unknown
     const payload = req.body as Record<string, any>;
 
     if (topic.startsWith('customers/')) {
-      await handleCustomerWebhook(payload);
+      await handleCustomerWebhook(topic, payload);
     } else if (topic.startsWith('products/')) {
       await handleProductWebhook(topic, payload);
     } else if (topic.startsWith('inventory_levels/')) {
