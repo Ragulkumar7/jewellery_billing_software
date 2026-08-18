@@ -12,4 +12,4 @@ button, input { font: inherit; }
 .bg-cyan { background: #15aeb7; }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-thumb { background: #d9dce7; border-radius: 999px; }
-@media (max-width: 900px) { .ml-\[190px\] { margin-left: 0; } }
+@media (max-width: 900px) { .ml-\[232px\] { margin-left: 0; } }

@@ -1,14 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
-  Activity, Bell, Boxes, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, CircleDollarSign,
-  ClipboardList, Clock3, CreditCard, FileBarChart, FileText, Gem, History, LayoutDashboard, Menu,
-  Package, PanelLeft, Receipt, RefreshCw, Search, Settings, ShieldCheck, ShoppingCart, Sparkles, Tags,
-  TrendingUp, Truck, Users, Wallet,
+  Bell, Boxes, CalendarDays, Check, ChevronDown, ChevronLeft, ClipboardList,
+  CreditCard, FileBarChart, FileText, Gem, History, LayoutDashboard, Menu, Package, PanelLeft,
+  Receipt, RefreshCw, Search, Settings, ShieldCheck, Sparkles, TrendingUp, Users, Wallet,
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { api, clearToken, getToken, login, logout, type ApiUser } from '@/lib/api';
 import { useSilverRate } from '@/lib/silver-rate-context';
-import { Panel, Footer } from '@/components/ui';
 import SalesInvoices from '@/views/SalesInvoices';
 import SalesOrders from '@/views/SalesOrders';
 import Customers from '@/views/Customers';
@@ -35,6 +32,7 @@ import Expenses from '@/views/Expenses';
 import Payments from '@/views/Payments';
 import PurchaseSystem from '@/views/PurchaseSystem';
 import Ledger from '@/views/Ledger';
+import Dashboard from '@/views/Dashboard';
 
 type NavGroup = { title: string; items: { label: string; icon: typeof LayoutDashboard }[] };
 
@@ -82,7 +80,7 @@ const headings: Record<string, string> = {
 };
 
 const subheadings: Record<string, string> = {
-  'Dashboard': "Welcome back, Admin. Here's what's happening with your business today.",
+  'Dashboard': 'Business health at a glance — sales, purchases, receivables, stock position, silver rate and Shopify sync for the selected period.',
   'Sales Invoices': 'Every sale needs an identifiable customer — create invoices, confirm drafts, record payments and print.',
   'Sales Orders': 'Create and track sales orders — confirm, convert to invoices, and control cancellations.',
   'Customers': 'Manage customer profiles, Shopify customers and purchase history.',
@@ -111,10 +109,73 @@ const subheadings: Record<string, string> = {
   'Activity Log': 'Audit trail of every important action — who did what, when, and what changed.',
 };
 
+// ---------- Dashboard date range ----------
+
+type RangeKey = 'today' | 'week' | 'month' | 'quarter' | 'year' | 'all';
+
+const RANGE_PRESETS: { key: RangeKey; label: string }[] = [
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: 'This Week' },
+  { key: 'month', label: 'This Month' },
+  { key: 'quarter', label: 'This Quarter' },
+  { key: 'year', label: 'This Year' },
+  { key: 'all', label: 'All Time' },
+];
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function toDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function formatRange(from: string, to: string): string {
+  if (!from || !to) return 'All Time';
+  if (from === to) {
+    const [y, m, d] = from.split('-').map(Number);
+    return `${d} ${MONTHS[m - 1]} ${y}`;
+  }
+  const [fy, fm, fd] = from.split('-').map(Number);
+  const [ty, tm, td] = to.split('-').map(Number);
+  if (fy === ty && fm === tm) return `${fd} – ${td} ${MONTHS[tm - 1]} ${ty}`;
+  if (fy === ty) return `${fd} ${MONTHS[fm - 1]} – ${td} ${MONTHS[tm - 1]} ${ty}`;
+  return `${fd} ${MONTHS[fm - 1]} ${fy} – ${td} ${MONTHS[tm - 1]} ${ty}`;
+}
+
+function computeRange(key: RangeKey): { from: string; to: string; display: string } {
+  const now = new Date();
+  const today = toDateStr(now);
+  switch (key) {
+    case 'today': return { from: today, to: today, display: formatRange(today, today) };
+    case 'week': {
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      const from = toDateStr(monday);
+      return { from, to: today, display: formatRange(from, today) };
+    }
+    case 'month': {
+      const from = `${today.slice(0, 8)}01`;
+      return { from, to: today, display: formatRange(from, today) };
+    }
+    case 'quarter': {
+      const q = Math.floor(now.getMonth() / 3) * 3;
+      const from = `${now.getFullYear()}-${String(q + 1).padStart(2, '0')}-01`;
+      return { from, to: today, display: formatRange(from, today) };
+    }
+    case 'year': {
+      const from = `${now.getFullYear()}-01-01`;
+      return { from, to: today, display: formatRange(from, today) };
+    }
+    case 'all': return { from: '2000-01-01', to: today, display: 'All Time' };
+  }
+}
+
 function App() {
   const [open, setOpen] = useState<Record<string, boolean>>(() => Object.fromEntries(groups.map((g) => [g.title, true])));
   const [active, setActive] = useState('Dashboard');
   const [sidebar, setSidebar] = useState(true);
+  const [rangeKey, setRangeKey] = useState<RangeKey>('month');
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const range = useMemo(() => computeRange(rangeKey), [rangeKey]);
   const { currentRate: rate } = useSilverRate();
   const [currentUser, setCurrentUser] = useState<ApiUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -156,7 +217,7 @@ function App() {
        case 'Users & Roles': return <UserRoles permissions={currentUser?.permissions || []} />;
       case 'Settings': return <SettingsView permissions={currentUser?.permissions || []} />;
       case 'Activity Log': return <ActivityLogView />;
-      case 'Dashboard': return <MainDashboard onNavigate={navigate} />;
+      case 'Dashboard': return <Dashboard onNavigate={navigate} from={range.from} to={range.to} showComparison={rangeKey !== 'all'} />;
       default: return <ComingSoon title={active} />;
     }
   }
@@ -165,17 +226,23 @@ function App() {
   if (!currentUser) return <LoginScreen onLogin={setCurrentUser} />;
 
   return <div className="min-h-screen bg-[#f7f8fc] text-[#1d2945]">
-    <aside className={`fixed inset-y-0 left-0 z-30 w-[190px] border-r border-slate-100 bg-white transition-transform duration-300 ${sidebar ? 'translate-x-0' : '-translate-x-full'}`}>
+    <aside className={`fixed inset-y-0 left-0 z-30 w-[232px] border-r border-slate-100 bg-white transition-transform duration-300 ${sidebar ? 'translate-x-0' : '-translate-x-full'}`}>
       <div className="flex h-[72px] items-center gap-3 border-b border-slate-100 px-4"><div className="grid h-9 w-9 place-items-center rounded-lg bg-[#4714a1] text-white shadow-lg shadow-purple-200"><Gem size={21}/></div><div><p className="text-[15px] font-bold leading-tight">Opal Line<br/>Jewelry</p><p className="mt-1 text-[9px] font-semibold text-slate-400">92.5 Sterling Silver<br/>Jewellery</p></div></div>
-       <nav className="h-[calc(100vh-72px)] overflow-y-auto px-3 py-4">{groups.map((group) => <div key={group.title} className="mb-3"><button onClick={() => toggle(group.title)} className="mb-1 flex w-full items-center justify-between px-1 text-[9px] font-bold uppercase tracking-[.12em] text-slate-400">{group.title}<ChevronDown size={12} className={`transition-transform ${open[group.title] ? '' : '-rotate-90'}`}/></button>{open[group.title] && <div className="space-y-0.5">{group.items.map(({label, icon: Icon}) => <button key={label} onClick={() => setActive(label)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[10px] font-medium transition ${active === label ? 'bg-[#f0e7ff] font-bold text-[#5419b5]' : 'text-slate-600 hover:bg-slate-50'}`}><Icon size={13}/>{label}{!implemented.has(label) && <span className="ml-auto rounded bg-slate-100 px-1 text-[7px] font-bold text-slate-400">soon</span>}</button>)}</div>}</div>)}<button onClick={async () => { await logout(); setCurrentUser(null); }} className="mt-1 flex w-full items-center gap-2 border-t border-slate-100 px-2 pt-3 text-[10px] font-medium text-slate-600"><PanelLeft size={14}/> Logout</button></nav>
-     </aside>
-    <main className={`min-h-screen transition-[margin] duration-300 ${sidebar ? 'ml-[190px]' : 'ml-0'}`}>
-       <header className="flex h-[72px] items-center justify-between border-b border-slate-100 bg-white px-6"><div className="flex items-center gap-4"><button onClick={() => setSidebar(!sidebar)} className="grid h-8 w-8 place-items-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50">{sidebar ? <ChevronLeft size={16}/> : <Menu size={17}/>}</button><div className="flex h-10 w-[325px] items-center gap-2 rounded-md bg-slate-50 px-3 text-slate-400"><Search size={15}/><input className="w-full bg-transparent text-xs outline-none placeholder:text-slate-400" placeholder="Search menu, customers, products..."/></div></div><div className="flex items-center gap-5 text-[10px]"><div className="text-right"><p className="text-slate-500">Silver Rate (92.5)</p><p className="font-bold text-emerald-600">₹{rate.toFixed(2)} <span className="font-normal text-slate-500">/ gm</span></p></div><Bell size={16} className="text-slate-600"/><Settings size={16} className="text-slate-600"/><div className="flex items-center gap-2 border-l border-slate-100 pl-4"><div><p className="font-bold">{currentUser.name}</p><p className="text-[8px] font-bold text-slate-400">{currentUser.roles?.[0]?.name || 'STAFF'}</p></div><div className="grid h-8 w-8 place-items-center rounded-lg bg-[#4714a1] text-xs font-bold text-white">{currentUser.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}</div></div></div></header>
-      <div className="mx-auto max-w-[1180px] px-6 py-5">
-        <div className="mb-4 flex items-start justify-between"><div><h1 className="text-xl font-bold">{headings[active] || active}</h1><p className="mt-1 text-[11px] text-slate-500">{subheadings[active] || ''}</p></div><button className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-600"><CalendarDays size={14}/> Jul 31, 2026 - Aug 07, 2026 <ChevronDown size={12}/></button></div>
+      <nav className="h-[calc(100vh-72px)] overflow-y-auto px-3 py-4">{groups.map((group) => <div key={group.title} className="mb-4"><button onClick={() => toggle(group.title)} className="mb-1.5 flex w-full items-center justify-between rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-slate-500 transition hover:text-slate-700">{group.title}<ChevronDown size={14} className={`transition-transform ${open[group.title] ? '' : '-rotate-90'}`}/></button>{open[group.title] && <div className="space-y-0.5">{group.items.map(({label, icon: Icon}) => <button key={label} onClick={() => setActive(label)} className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[11px] font-medium transition ${active === label ? 'bg-[#f0e7ff] font-bold text-[#5419b5]' : 'text-slate-600 hover:bg-slate-50'}`}><Icon size={14}/>{label}{!implemented.has(label) && <span className="ml-auto rounded bg-slate-100 px-1.5 py-0.5 text-[7px] font-bold text-slate-400">soon</span>}</button>)}</div>}</div>)}<button onClick={async () => { await logout(); setCurrentUser(null); }} className="mt-2 flex w-full items-center gap-2.5 border-t border-slate-100 px-2.5 pt-3 text-[11px] font-medium text-slate-600 transition hover:text-slate-900"><PanelLeft size={14}/> Logout</button></nav>
+    </aside>
+    <main className={`min-h-screen transition-[margin] duration-300 ${sidebar ? 'ml-[232px]' : 'ml-0'}`}>
+      <header className="flex h-[72px] items-center justify-between gap-4 border-b border-slate-100 bg-white px-5 md:px-6"><div className="flex min-w-0 items-center gap-4"><button onClick={() => setSidebar(!sidebar)} className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50">{sidebar ? <ChevronLeft size={16}/> : <Menu size={17}/>}</button><div className="flex h-10 w-[280px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-slate-500 transition focus-within:border-[#cab4f3] focus-within:bg-white sm:w-[360px] xl:w-[420px]"><Search size={15}/><input className="w-full bg-transparent text-[13px] outline-none placeholder:text-slate-400" placeholder="Search menu, customers, products..."/></div></div><div className="flex shrink-0 items-center gap-4 text-[10px] sm:gap-5"><div className="hidden text-right sm:block"><p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">92.5 Silver</p><p className="text-base font-bold text-emerald-600">₹{rate.toFixed(2)} <span className="text-[10px] font-semibold text-slate-500">/g</span></p></div><Bell size={16} className="text-slate-600"/><Settings size={16} className="text-slate-600"/><div className="flex items-center gap-2.5 border-l border-slate-100 pl-4"><div className="hidden text-right sm:block"><p className="text-xs font-bold">{currentUser.name}</p><p className="text-[9px] font-semibold text-slate-400">{currentUser.roles?.[0]?.name && currentUser.roles[0].name !== currentUser.name ? currentUser.roles[0].name : 'Administrator'}</p></div><div className="grid h-8 w-8 place-items-center rounded-lg bg-[#4714a1] text-xs font-bold text-white">{currentUser.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}</div></div></div></header>
+      <div className="px-5 py-5 md:px-6 xl:px-8">
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div><h1 className="text-xl font-bold">{headings[active] || active}</h1><p className="mt-1 max-w-3xl text-xs text-slate-500">{subheadings[active] || ''}</p></div>
+          <div className="relative">
+            <button onClick={() => setRangeOpen((v) => !v)} className="flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-700 shadow-sm transition hover:border-[#cab4f3]"><CalendarDays size={14} className="text-slate-400"/>{range.display}<ChevronDown size={13} className={`transition-transform ${rangeOpen ? 'rotate-180' : ''}`}/></button>
+            {rangeOpen && <div className="absolute right-0 top-11 z-30 w-44 overflow-hidden rounded-lg border border-slate-100 bg-white py-1 shadow-xl">{RANGE_PRESETS.map((p) => <button key={p.key} onClick={() => { setRangeKey(p.key); setRangeOpen(false); }} className={`flex w-full items-center justify-between px-3 py-2 text-left text-[11px] font-semibold ${rangeKey === p.key ? 'bg-purple-50 text-[#5419b5]' : 'text-slate-600 hover:bg-slate-50'}`}>{p.label}{rangeKey === p.key && <Check size={13}/>}</button>)}</div>}
+          </div>
+        </div>
         {renderView()}
       </div>
-     </main>
+    </main>
   </div>;
 }
 
@@ -205,21 +272,6 @@ function LoginScreen({ onLogin }: { onLogin: (user: ApiUser) => void }) {
 
 function ComingSoon({ title }: { title: string }) {
   return <div className="grid place-items-center rounded-xl border border-dashed border-slate-200 bg-white py-20 text-center"><div><div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-purple-50 text-[#6f39bd]"><Sparkles size={24}/></div><p className="text-sm font-bold">{title}</p><p className="mt-1 text-xs text-slate-400">This module is part of the upcoming build.</p></div></div>;
-}
-
-function MainDashboard({ onNavigate }: { onNavigate: (v: string) => void }) {
-  const { currentRate } = useSilverRate();
-  return <>
-    <div className="mb-5 flex gap-2 overflow-x-auto pb-1">
-      {['New Invoice', 'Sales Invoices', 'Customers', 'Products', 'Returns', 'Silver Rate', 'Reports', 'Expense', 'Stock Transfer'].map((item, i) => <button key={item} onClick={() => onNavigate(item === 'New Invoice' ? 'Sales Invoices' : item)} className="flex shrink-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-[10px] font-semibold text-slate-700 shadow-sm hover:border-[#cab4f3] hover:text-[#5419b5]"><Sparkles size={13} className={i === 0 ? 'text-[#5419b5]' : 'text-slate-400'}/>{item}</button>)}
-    </div>
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-6">
-      {[['Today’s Sales', '₹1,24,560', '▲ 18.6% vs yesterday', 'orange', CalendarDays], ['Today’s Purchases', '₹85,230', '▲ 12.4% vs yesterday', 'navy', History], ['Total Orders', '32', '▲ 9.7% vs yesterday', 'teal', ShoppingCart], ['Total Invoices', '47', '▲ 15.2% vs yesterday', 'blue', FileText], ['Gross Profit', '₹39,330', '▲ 21.3% vs yesterday', 'violet', CircleDollarSign], ['Outstanding', '₹1,12,450', '5 Invoices', 'cyan', Wallet]].map(([title, value, sub, color, Icon]) => { const I = Icon as typeof CalendarDays; return <div key={title as string} className={`rounded-xl p-4 text-white shadow-sm bg-${color as string}`}><div className="mb-3 flex items-center justify-between"><p className="text-[10px] font-medium">{title as string}</p><div className="grid h-8 w-8 place-items-center rounded-lg bg-white/20"><I size={16}/></div></div><p className="text-lg font-bold">{value as string}</p><p className="mt-1 text-[9px] text-white/80">{sub as string}</p></div>; })}
-    </div>
-    <div className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-6">{[['Total Products','312','Active Products',Package],['Low Stock Items','18','Needs Reorder',Bell],['Total Customers','186','Active Customers',Users],['Total Suppliers','24','Active Suppliers',Users],['Today’s Expenses','₹12,450','',Wallet],['Pending Payments','₹1,12,450','8 Invoices',CreditCard]].map(([a,b,c,Icon]) => { const I = Icon as typeof Package; return <div key={a as string} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-4 shadow-sm"><div><p className="text-[9px] font-semibold text-slate-500">{a as string}</p><p className="mt-2 text-base font-bold">{b as string}</p><p className="mt-1 text-[9px] text-slate-400">{c as string}</p></div><div className="grid h-8 w-8 place-items-center rounded-lg bg-purple-50 text-[#6f39bd]"><I size={16}/></div></div>; })}</div>
-    <div className="mt-5 grid gap-3 xl:grid-cols-3"><Panel title="Sales Overview" icon={TrendingUp}><div className="h-44 pt-3"><svg viewBox="0 0 500 160" className="h-full w-full"><path d="M0 124 C55 118 80 110 125 87 S190 67 220 36 S285 77 326 88 S390 87 420 66 S465 52 500 14 V160 H0Z" fill="#fff0e5"/><path d="M0 124 C55 118 80 110 125 87 S190 67 220 36 S285 77 326 88 S390 87 420 66 S465 52 500 14" fill="none" stroke="#fb7a14" strokeWidth="3"/><g fill="#fb7a14">{[0,125,220,326,420,500].map((x) => <circle key={x} cx={x} cy={x===0?124:x===125?87:x===220?36:x===326?88:x===420?66:14} r="4"/>)}</g></svg></div><div className="flex justify-between px-2 text-[9px] text-slate-400"><span>Sat</span><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span></div></Panel><Panel title="Top Selling Products" icon={Gem}><div className="space-y-3 text-[10px]">{['Silver Chain','Silver Ring','Silver Bracelet','Silver Pendant','Silver Earrings'].map((x,i) => <div className="flex items-center justify-between border-b border-slate-50 pb-2" key={x}><span className="flex items-center gap-2"><Gem size={13} className="text-slate-400"/>{x}</span><span className="text-slate-500">{[135,98,75,62,58][i]} gm</span><b>₹{[18900,14210,11250,9610,8520][i].toLocaleString('en-IN')}</b></div>)}</div><Footer text="View All Products"/></Panel><Panel title="Payment Status" icon={CreditCard}><div className="flex items-center justify-center gap-5 py-5"><div className="h-32 w-32 rounded-full" style={{background:'conic-gradient(#ff921e 0 34%, #32b764 34% 99%, #ef5350 99% 100%)'}}><div className="m-7 h-18 w-18 rounded-full bg-white"/></div><div className="space-y-3 text-[10px]"><p><i className="mr-2 inline-block h-2 w-2 rounded-full bg-emerald-500"/>Paid<br/><span className="ml-4 text-slate-500">₹2,35,600 (67%)</span></p><p><i className="mr-2 inline-block h-2 w-2 rounded-full bg-orange-400"/>Pending<br/><span className="ml-4 text-slate-500">₹1,12,450 (32%)</span></p><p><i className="mr-2 inline-block h-2 w-2 rounded-full bg-red-400"/>Overdue<br/><span className="ml-4 text-slate-500">₹5,870 (1%)</span></p></div></div><Footer text="View Receivables"/></Panel></div>
-    <div className="mt-3 grid gap-3 xl:grid-cols-3"><Panel title="Silver Rate History (92.5)" icon={Activity}><div className="flex justify-between text-[10px] text-emerald-600"><span>₹90</span><b>Today: ₹{currentRate.toFixed(2)} / gm</b></div><div className="mt-3 h-20"><svg viewBox="0 0 500 80" className="h-full w-full"><path d="M0 45 C55 52 75 66 120 58 S180 23 230 28 S290 24 335 33 S390 61 420 48 S470 38 500 10" fill="none" stroke="#29ad65" strokeWidth="2"/></svg></div><div className="flex justify-between text-[9px] text-slate-400"><span>01 Aug</span><span>02 Aug</span><span>03 Aug</span><span>04 Aug</span><span>05 Aug</span><span>06 Aug</span><span>07 Aug</span></div></Panel><Panel title="Low Stock Alert" icon={Bell}><div className="space-y-3 text-[10px]">{['Silver Chain 18 inch','Silver Ring Plain','Silver Bracelet Classic'].map((x,i)=><div className="flex justify-between" key={x}><span className="flex items-center gap-2"><span className="grid h-5 w-5 place-items-center rounded-full bg-slate-100"><Gem size={11}/></span>{x}</span><b className="text-red-500">Stock: {i+2} pcs</b></div>)}</div><Footer text="View All Low Stock"/></Panel><Panel title="Recent Activities" icon={Activity}><div className="space-y-3 text-[10px]">{[`Silver rate updated to ₹${currentRate.toFixed(2)} / gm`,'Purchase Invoice PI–2026–087 created','Sales Invoice SI–2026–194 created','Payment received from Rajesh Jewellers'].map((x,i)=><div className="flex justify-between" key={x}><span className="flex items-center gap-2"><Clock3 size={12} className="text-[#6f39bd]"/>{x}</span><span className="text-[9px] text-slate-400">{i?`Today, 08:${45-i*7} AM`:'Today, 09:00 AM'}</span></div>)}</div><Footer text="View All Activities"/></Panel></div>
-  </>;
 }
 
 export default App;
