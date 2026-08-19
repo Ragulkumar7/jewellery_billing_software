@@ -10,6 +10,11 @@ button, input { font: inherit; }
 .bg-blue { background: #2f6fe5; }
 .bg-violet { background: #7651cb; }
 .bg-cyan { background: #15aeb7; }
+.bg-green { background: #16a34a; }
+.bg-amber { background: #f59e0b; }
+.bg-red { background: #dc2626; }
+.bg-rose { background: #e11d48; }
+.bg-slate { background: #64748b; }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-thumb { background: #d9dce7; border-radius: 999px; }
 @media (max-width: 900px) { .ml-\[232px\] { margin-left: 0; } }

@@ -6,3 +6,5 @@ dist
 coverage
 .turbo
 .runtime
+.omo
+.codegraph
