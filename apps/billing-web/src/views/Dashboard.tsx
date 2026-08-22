@@ -230,7 +230,7 @@ function SilverHistoryChart({ rows }: { rows: SilverHistoryRow[] }) {
 // ---------- dashboard ----------
 
 export default function Dashboard({ onNavigate, from, to, showComparison = true }: { onNavigate: (v: string) => void; from: string; to: string; showComparison?: boolean }) {
-  const { currentRate, previousRate, effectiveTime } = useSilverRate();
+  const { currentRate, previousRate, effectiveTime, status: rateStatus } = useSilverRate();
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [business, setBusiness] = useState<BusinessData | null>(null);
   const [inventory, setInventory] = useState<InventoryData | null>(null);
@@ -423,18 +423,24 @@ export default function Dashboard({ onNavigate, from, to, showComparison = true 
           <PanelFooter text="View Sync" onClick={() => onNavigate('Shopify Sync')} />
         </DashPanel>
 
-        <DashPanel title="Silver Rate (92.5)" icon={TrendingUp} badge={<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${rateChange >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>{rateChange >= 0 ? '+' : ''}{rateChange.toFixed(2)} /g</span>} action={<button onClick={() => onNavigate('Silver Rate')} className="text-[10px] font-bold text-[#6f39bd]">Update</button>}>
-          <div className="flex items-end justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-semibold text-slate-400">Current rate</p>
-              <p className="text-2xl font-bold text-emerald-600">₹{currentRate.toFixed(2)} <span className="text-xs font-semibold text-slate-400">/ gram</span></p>
+        <DashPanel title="Silver Rate (92.5)" icon={TrendingUp} badge={rateStatus === 'ready' ? <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${rateChange >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>{rateChange >= 0 ? '+' : ''}{rateChange.toFixed(2)} /g</span> : undefined} action={<button onClick={() => onNavigate('Silver Rate')} className="text-[10px] font-bold text-[#6f39bd]">Update</button>}>
+          {rateStatus === 'ready' ? (
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-semibold text-slate-400">Current rate</p>
+                <p className="text-2xl font-bold text-emerald-600">₹{currentRate.toFixed(2)} <span className="text-xs font-semibold text-slate-400">/ gram</span></p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] font-semibold text-slate-400">Previous</p>
+                <p className="text-sm font-bold">₹{previousRate.toFixed(2)} /g</p>
+              </div>
             </div>
-            <div className="text-right">
-              <p className="text-[10px] font-semibold text-slate-400">Previous</p>
-              <p className="text-sm font-bold">₹{previousRate.toFixed(2)} /g</p>
-            </div>
-          </div>
-          <p className="mt-1 text-[9px] text-slate-400">{effectiveTime ? `Updated ${effectiveTime}` : 'Rate from product master'} · 92.5 sterling silver</p>
+          ) : (
+            <button onClick={() => onNavigate('Silver Rate')} className="w-full rounded-lg border border-dashed border-slate-300 py-4 text-xs font-bold text-amber-600 hover:border-amber-300">
+              {rateStatus === 'loading' ? 'Loading rate…' : rateStatus === 'error' ? `Rate unavailable — retry` : 'No silver rate set — click to set it'}
+            </button>
+          )}
+          {rateStatus === 'ready' && <p className="mt-1 text-[9px] text-slate-400">{effectiveTime ? `Updated ${effectiveTime}` : 'Rate from product master'} · 92.5 sterling silver</p>}
           <SilverHistoryChart rows={silverHistory} />
         </DashPanel>
       </div>

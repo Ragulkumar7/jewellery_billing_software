@@ -11,7 +11,7 @@ export default function POSDashboard({ onNavigate }: { onNavigate: (v: string) =
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [held, setHeld] = useState<HeldBill[]>([]);
   const [shift, setShift] = useState<Shift | null>(null);
-  const { currentRate: rate } = useSilverRate();
+  const { currentRate: rate, status: rateStatus } = useSilverRate();
   const [pending, setPending] = useState(0);
 
   useEffect(() => { load(); }, []);
@@ -56,7 +56,9 @@ export default function POSDashboard({ onNavigate }: { onNavigate: (v: string) =
       {/* Silver rate + shift status banner */}
       <div className="grid gap-2 sm:grid-cols-3">
         <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 p-4 text-white shadow-sm">
-          <div><p className="text-[9px] font-medium opacity-90">Today's Silver Rate (92.5)</p><p className="text-xl font-bold">₹{rate.toFixed(2)} <span className="text-[10px] font-normal opacity-80">/ gram</span></p></div>
+          <div><p className="text-[9px] font-medium opacity-90">Today's Silver Rate (92.5)</p>{rateStatus === 'ready'
+            ? <p className="text-xl font-bold">₹{rate.toFixed(2)} <span className="text-[10px] font-normal opacity-80">/ gram</span></p>
+            : <button onClick={() => onNavigate('Silver Rate')} className="text-xl font-bold underline decoration-white/50 underline-offset-4">{rateStatus === 'loading' ? '…' : 'Set rate'}</button>}</div>
           <Store size={28} className="opacity-40"/>
         </div>
         <div className="flex items-center justify-between rounded-xl bg-white p-4 shadow-sm border border-slate-100">
