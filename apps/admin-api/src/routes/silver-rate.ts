@@ -34,14 +34,29 @@ router.get('/api/silver-rate', authenticate, requirePermission('silver_rate.view
       if (!value) return null;
       return String(value).slice(0, 5);
     };
+    // Regression guard: never fabricate a rate — an empty table means "not configured".
+    if (!current) {
+      return res.json({
+        success: true,
+        data: {
+          currentRate: null,
+          previousRate: null,
+          effectiveDate: null,
+          effectiveTime: null,
+          updatedAt: null,
+          configured: false,
+        },
+      });
+    }
     res.json({
       success: true,
       data: {
-        currentRate: current ? Number(current.rate_per_gram) : 92.8,
-        previousRate: previous ? Number(previous.rate_per_gram) : (current ? Number(current.rate_per_gram) : 92.8),
-        effectiveDate: formatDate(current?.effective_date),
-        effectiveTime: formatTime(current?.effective_time),
-        updatedAt: current?.created_at ?? null,
+        currentRate: Number(current.rate_per_gram),
+        previousRate: Number(previous.rate_per_gram),
+        effectiveDate: formatDate(current.effective_date),
+        effectiveTime: formatTime(current.effective_time),
+        updatedAt: current.created_at ?? null,
+        configured: true,
       },
     });
   } catch (error) { next(error); }
@@ -114,14 +129,19 @@ router.post('/api/silver-rate/publish', authenticate, requirePermission('silver_
   if (!pool) return res.status(503).json({ success: false, message: 'DATABASE_URL is not configured' });
   const parsed = publishSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Invalid publish payload', issues: parsed.error.issues });
-  let rate = 92.8;
+  let rate: number;
   let affected = 0;
   const skus: string[] = [];
   const client = await pool.connect();
   try {
     await client.query('begin');
     const rateRow = await client.query('select rate_per_gram from silver_rates order by effective_date desc, effective_time desc, created_at desc limit 1');
-    rate = Number(rateRow.rows[0]?.rate_per_gram || 92.8);
+    if (!rateRow.rows[0]) {
+      await client.query('rollback').catch(() => undefined);
+      client.release();
+      return res.status(400).json({ success: false, message: 'Silver rate is not configured. Set a rate before publishing prices.' });
+    }
+    rate = Number(rateRow.rows[0].rate_per_gram);
     const { rows } = parsed.data.productIds?.length
       ? await client.query('select id, sku, net_weight, making_charge, stone_charge, other_charge, gst_rate from products where id = any($1::uuid[]) and status = $2', [parsed.data.productIds, 'Active'])
       : await client.query('select id, sku, net_weight, making_charge, stone_charge, other_charge, gst_rate from products where status = $1', ['Active']);
