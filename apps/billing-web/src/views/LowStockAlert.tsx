@@ -1,17 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, AlertTriangle, Package, ShoppingCart, History, Eye, CheckCircle, XCircle, Plus } from 'lucide-react';
-import { supabase, inr, type Product } from '@/lib/supabase';
+import { api } from '@/lib/api';
+import { type Product } from '@/lib/supabase';
 import { Badge, EmptyState, Panel } from '@/components/ui';
 
 export default function LowStockAlert({ onNavigate }: { onNavigate: (v: string) => void }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => { load(); }, []);
   async function load() {
-    const { data } = await supabase.from('products').select('*').order('stock_qty', { ascending: true });
-    if (data) setProducts(data as Product[]);
+    try {
+      setProducts(await api<Product[]>('/api/products'));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Unable to load products');
+    }
+  }
+
+  async function updateMinStock(p: Product, minStockQty: number) {
+    try {
+      await api(`/api/products/${p.id}`, { method: 'PUT', body: JSON.stringify({ min_stock_qty: minStockQty }) });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Unable to update product');
+    }
   }
 
   const alertProducts = useMemo(() => products.filter((p) => p.stock_qty <= p.min_stock_qty), [products]);
@@ -40,17 +55,16 @@ export default function LowStockAlert({ onNavigate }: { onNavigate: (v: string) 
   const outCount = alertProducts.filter((p) => p.stock_qty === 0).length;
 
   async function dismissAlert(p: Product) {
-    await supabase.from('products').update({ min_stock_qty: 0 }).eq('id', p.id);
-    load();
+    await updateMinStock(p, 0);
   }
 
   async function markReviewed(p: Product) {
-    await supabase.from('products').update({ min_stock_qty: p.stock_qty + 1 }).eq('id', p.id);
-    load();
+    await updateMinStock(p, p.stock_qty + 1);
   }
 
   return (
     <div className="space-y-3">
+      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-[11px] font-semibold text-red-600">{error}</div>}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-4">
         {[
           ['Total Alerts', String(alertProducts.length), 'orange', AlertTriangle],
