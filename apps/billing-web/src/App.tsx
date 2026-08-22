@@ -6,6 +6,9 @@ import {
 } from 'lucide-react';
 import { api, clearToken, getToken, login, logout, type ApiUser } from '@/lib/api';
 import { useSilverRate } from '@/lib/silver-rate-context';
+import NotificationCenter from '@/components/NotificationCenter';
+import UserMenu from '@/components/UserMenu';
+import NotificationsView from '@/views/NotificationsView';
 import SalesInvoices from '@/views/SalesInvoices';
 import SalesOrders from '@/views/SalesOrders';
 import Customers from '@/views/Customers';
@@ -44,10 +47,10 @@ const groups: NavGroup[] = [
   { title: 'Sync', items: [{ label: 'Shopify Sync', icon: RefreshCw }, { label: 'Silver Rate', icon: TrendingUp }] },
   { title: 'Accounts', items: [{ label: 'Expense', icon: Wallet }, { label: 'Payments', icon: CreditCard }, { label: 'Purchase System', icon: Receipt }, { label: 'Ledger', icon: FileText }] },
   { title: 'Reports', items: [{ label: 'Business Reports', icon: FileBarChart }, { label: 'Sales Report', icon: FileText }, { label: 'GST Reports', icon: ShieldCheck }, { label: 'Sales Analysis', icon: TrendingUp }, { label: 'Inventory Reports', icon: Boxes }] },
-  { title: 'System', items: [{ label: 'Users & Roles', icon: Users }, { label: 'Settings', icon: Settings }, { label: 'Activity Log', icon: History }] },
+  { title: 'System', items: [{ label: 'Users & Roles', icon: Users }, { label: 'Settings', icon: Settings }, { label: 'Notifications', icon: Bell }, { label: 'Activity Log', icon: History }] },
 ];
 
-const implemented = new Set(['Dashboard', 'Sales Invoices', 'Sales Orders', 'Customers', 'Returns', 'Purchase Orders', 'Purchase Invoices', 'GRN / Stock Receive', 'Suppliers', 'Purchase Returns', 'Products', 'Stock Overview', 'Low Stock Alert', 'Shopify Sync', 'Silver Rate', 'Expense', 'Payments', 'Purchase System', 'Ledger', 'Business Reports', 'Sales Report', 'GST Reports', 'Sales Analysis', 'Inventory Reports', 'Users & Roles', 'Settings', 'Activity Log']);
+const implemented = new Set(['Dashboard', 'Sales Invoices', 'Sales Orders', 'Customers', 'Returns', 'Purchase Orders', 'Purchase Invoices', 'GRN / Stock Receive', 'Suppliers', 'Purchase Returns', 'Products', 'Stock Overview', 'Low Stock Alert', 'Shopify Sync', 'Silver Rate', 'Expense', 'Payments', 'Purchase System', 'Ledger', 'Business Reports', 'Sales Report', 'GST Reports', 'Sales Analysis', 'Inventory Reports', 'Users & Roles', 'Settings', 'Notifications', 'Activity Log']);
 
 const headings: Record<string, string> = {
   'Dashboard': 'Dashboard Overview',
@@ -76,6 +79,7 @@ const headings: Record<string, string> = {
   'Inventory Reports': 'Inventory Reports',
   'Users & Roles': 'Users & Roles',
   'Settings': 'System Settings',
+  'Notifications': 'Notification Center',
   'Activity Log': 'Activity Log',
 };
 
@@ -176,7 +180,7 @@ function App() {
   const [rangeKey, setRangeKey] = useState<RangeKey>('month');
   const [rangeOpen, setRangeOpen] = useState(false);
   const range = useMemo(() => computeRange(rangeKey), [rangeKey]);
-  const { currentRate: rate } = useSilverRate();
+  const { currentRate: rate, status: rateStatus, refreshRate } = useSilverRate();
   const [currentUser, setCurrentUser] = useState<ApiUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -184,6 +188,11 @@ function App() {
     if (!getToken()) { setAuthLoading(false); return; }
     api<ApiUser>('/api/auth/me').then(setCurrentUser).catch(() => { clearToken(); }).finally(() => setAuthLoading(false));
   }, []);
+
+  // The provider mounts before login, so its first fetch 401s — refetch once authenticated.
+  useEffect(() => {
+    if (currentUser) void refreshRate();
+  }, [currentUser, refreshRate]);
 
 
   const toggle = (title: string) => setOpen((c) => ({ ...c, [title]: !c[title] }));
@@ -216,6 +225,7 @@ function App() {
       case 'Inventory Reports': return <InventoryReport permissions={currentUser?.permissions || []} onNavigate={navigate} />;
        case 'Users & Roles': return <UserRoles permissions={currentUser?.permissions || []} />;
       case 'Settings': return <SettingsView permissions={currentUser?.permissions || []} />;
+      case 'Notifications': return <NotificationsView userId={currentUser?.id} />;
       case 'Activity Log': return <ActivityLogView />;
       case 'Dashboard': return <Dashboard onNavigate={navigate} from={range.from} to={range.to} showComparison={rangeKey !== 'all'} />;
       default: return <ComingSoon title={active} />;
@@ -231,7 +241,9 @@ function App() {
       <nav className="h-[calc(100vh-72px)] overflow-y-auto px-3 py-4">{groups.map((group) => <div key={group.title} className="mb-4"><button onClick={() => toggle(group.title)} className="mb-1.5 flex w-full items-center justify-between rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-slate-500 transition hover:text-slate-700">{group.title}<ChevronDown size={14} className={`transition-transform ${open[group.title] ? '' : '-rotate-90'}`}/></button>{open[group.title] && <div className="space-y-0.5">{group.items.map(({label, icon: Icon}) => <button key={label} onClick={() => setActive(label)} className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[11px] font-medium transition ${active === label ? 'bg-[#f0e7ff] font-bold text-[#5419b5]' : 'text-slate-600 hover:bg-slate-50'}`}><Icon size={14}/>{label}{!implemented.has(label) && <span className="ml-auto rounded bg-slate-100 px-1.5 py-0.5 text-[7px] font-bold text-slate-400">soon</span>}</button>)}</div>}</div>)}<button onClick={async () => { await logout(); setCurrentUser(null); }} className="mt-2 flex w-full items-center gap-2.5 border-t border-slate-100 px-2.5 pt-3 text-[11px] font-medium text-slate-600 transition hover:text-slate-900"><PanelLeft size={14}/> Logout</button></nav>
     </aside>
     <main className={`min-h-screen transition-[margin] duration-300 ${sidebar ? 'ml-[232px]' : 'ml-0'}`}>
-      <header className="flex h-[72px] items-center justify-between gap-4 border-b border-slate-100 bg-white px-5 md:px-6"><div className="flex min-w-0 items-center gap-4"><button onClick={() => setSidebar(!sidebar)} className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50">{sidebar ? <ChevronLeft size={16}/> : <Menu size={17}/>}</button><div className="flex h-10 w-[280px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-slate-500 transition focus-within:border-[#cab4f3] focus-within:bg-white sm:w-[360px] xl:w-[420px]"><Search size={15}/><input className="w-full bg-transparent text-[13px] outline-none placeholder:text-slate-400" placeholder="Search menu, customers, products..."/></div></div><div className="flex shrink-0 items-center gap-4 text-[10px] sm:gap-5"><div className="hidden text-right sm:block"><p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">92.5 Silver</p><p className="text-base font-bold text-emerald-600">₹{rate.toFixed(2)} <span className="text-[10px] font-semibold text-slate-500">/g</span></p></div><Bell size={16} className="text-slate-600"/><Settings size={16} className="text-slate-600"/><div className="flex items-center gap-2.5 border-l border-slate-100 pl-4"><div className="hidden text-right sm:block"><p className="text-xs font-bold">{currentUser.name}</p><p className="text-[9px] font-semibold text-slate-400">{currentUser.roles?.[0]?.name && currentUser.roles[0].name !== currentUser.name ? currentUser.roles[0].name : 'Administrator'}</p></div><div className="grid h-8 w-8 place-items-center rounded-lg bg-[#4714a1] text-xs font-bold text-white">{currentUser.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}</div></div></div></header>
+      <header className="flex h-[72px] items-center justify-between gap-4 border-b border-slate-100 bg-white px-5 md:px-6"><div className="flex min-w-0 items-center gap-4"><button onClick={() => setSidebar(!sidebar)} className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50">{sidebar ? <ChevronLeft size={16}/> : <Menu size={17}/>}</button><div className="flex h-10 w-[280px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-slate-500 transition focus-within:border-[#cab4f3] focus-within:bg-white sm:w-[360px] xl:w-[420px]"><Search size={15}/><input className="w-full bg-transparent text-[13px] outline-none placeholder:text-slate-400" placeholder="Search menu, customers, products..."/></div></div><div className="flex shrink-0 items-center gap-4 text-[10px] sm:gap-5"><div className="hidden text-right sm:block"><p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">92.5 Silver</p>{rateStatus === 'ready'
+  ? <p className="text-base font-bold text-emerald-600">₹{rate.toFixed(2)} <span className="text-[10px] font-semibold text-slate-500">/g</span></p>
+  : <button onClick={() => navigate('Silver Rate')} className={`text-base font-bold ${rateStatus === 'loading' ? 'animate-pulse text-slate-400' : 'text-amber-600'}`}>{rateStatus === 'loading' ? '…' : 'Set rate'}</button>}</div><NotificationCenter userId={currentUser.id} onNavigate={navigate} /><button onClick={() => navigate('Settings')} aria-label="System Settings" className="grid h-8 w-8 place-items-center rounded-full text-slate-600 transition hover:bg-slate-100"><Settings size={16} /></button><div className="flex items-center gap-2.5 border-l border-slate-100 pl-4"><UserMenu user={currentUser} onNavigate={navigate} onLogout={async () => { await logout(); setCurrentUser(null); }} /></div></div></header>
       <div className="px-5 py-5 md:px-6 xl:px-8">
         <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div><h1 className="text-xl font-bold">{headings[active] || active}</h1><p className="mt-1 max-w-3xl text-xs text-slate-500">{subheadings[active] || ''}</p></div>
