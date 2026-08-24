@@ -13,24 +13,3 @@ CREATE TABLE IF NOT EXISTS product_price_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_price_snapshots_product ON product_price_snapshots(product_id, computed_at DESC);
-</｜DSML｜>
-<task_progress>
-- [x] Create migration 008 (silver_rate_history)
-- [x] Update silver-rate backend routes (GET/POST/publish)
-- [x] Fix GET date/time formatting
-- [x] Create SilverRateContext + provider
-- [x] Wire App.tsx header to context
-- [x] Update SilverRate.tsx to use context
-- [x] Update POSBilling to use context
-- [x] Update POSDashboard to use context
-- [x] Update Products to use context
-- [x] Verify SalesInvoices already wired to context
-- [x] Type check frontend + backend
-- [ ] Create migration 009 (product_price_snapshots)
-- [ ] Run migrations 008 + 009
-- [ ] Verify GET returns clean date
-- [ ] Verify project running
-- [ ] Clean up temp files
-- [ ] Present result
-</｜DSML｜>
-</write_to_file>
