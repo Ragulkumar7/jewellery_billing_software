@@ -1,0 +1,14 @@
+# Railway deploy config for the admin-api service.
+# Deploy this repo from its ROOT (do not set a subdirectory as the service root):
+# Railway reads this file, installs the pnpm workspace from the monorepo root,
+# builds only admin-api with tsup, and starts the compiled server.
+# The server listens on process.env.PORT, which Railway injects automatically.
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "pnpm install --frozen-lockfile && pnpm --filter admin-api build"
+
+[deploy]
+startCommand = "pnpm --filter admin-api start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
