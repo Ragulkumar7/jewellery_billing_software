@@ -1,12 +1,15 @@
 # Railway deploy config for the admin-api service.
-# Deploy this repo from its ROOT (do not set a subdirectory as the service root):
-# Railway reads this file, installs the pnpm workspace from the monorepo root,
-# builds only admin-api with tsup, and starts the compiled server.
+# Deploy this repo from its ROOT (do not set a subdirectory as the service root).
 # The server listens on process.env.PORT, which Railway injects automatically.
+#
+# installCommand MUST override Nixpacks' default: it pins corepack@0.24.1,
+# which crashes on Node 24 (ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING) when
+# shimming pnpm 11. Upgrading corepack first makes the workspace install work.
 
 [build]
 builder = "NIXPACKS"
-buildCommand = "pnpm install --frozen-lockfile && pnpm --filter admin-api build"
+installCommand = "npm install -g corepack@latest && corepack enable && corepack prepare pnpm@11.20.0 --activate && pnpm install --frozen-lockfile"
+buildCommand = "pnpm --filter admin-api build"
 
 [deploy]
 startCommand = "pnpm --filter admin-api start"
