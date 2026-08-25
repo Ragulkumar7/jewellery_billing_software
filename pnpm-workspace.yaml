@@ -1,6 +1,9 @@
 packages:
   - "apps/*"
   - "packages/*"
-allowBuilds:
-  esbuild: set this to true or false
-  unrs-resolver: set this to true or false
+
+# pnpm >= 10 refuses to run dependency install scripts unless explicitly
+# allowed here; without esbuild's script a fresh clone cannot run vite/tsup.
+onlyBuiltDependencies:
+  - esbuild
+  - unrs-resolver
