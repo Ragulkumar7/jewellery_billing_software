@@ -3,11 +3,20 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./api": "./src/api.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "default": "./dist/api.js"
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.json",
     "check-types": "tsc --noEmit"
   },
   "devDependencies": {

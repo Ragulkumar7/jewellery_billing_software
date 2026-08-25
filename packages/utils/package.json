@@ -3,16 +3,40 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./logger": "./src/logger.ts",
-    "./date": "./src/date.ts",
-    "./string": "./src/string.ts",
-    "./number": "./src/number.ts",
-    "./validation": "./src/validation.ts",
-    "./crypto": "./src/crypto.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./logger": {
+      "types": "./dist/logger.d.ts",
+      "default": "./dist/logger.js"
+    },
+    "./date": {
+      "types": "./dist/date.d.ts",
+      "default": "./dist/date.js"
+    },
+    "./string": {
+      "types": "./dist/string.d.ts",
+      "default": "./dist/string.js"
+    },
+    "./number": {
+      "types": "./dist/number.d.ts",
+      "default": "./dist/number.js"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.ts",
+      "default": "./dist/validation.js"
+    },
+    "./crypto": {
+      "types": "./dist/crypto.d.ts",
+      "default": "./dist/crypto.js"
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.json",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {

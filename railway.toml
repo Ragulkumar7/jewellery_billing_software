@@ -6,7 +6,7 @@
 
 [build]
 builder = "RAILPACK"
-buildCommand = "pnpm install --frozen-lockfile && pnpm --filter admin-api build"
+buildCommand = "pnpm install --frozen-lockfile && pnpm --filter admin-api... build"
 
 [deploy]
 startCommand = "pnpm --filter admin-api start"
