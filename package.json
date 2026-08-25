@@ -13,6 +13,12 @@
     "turbo": "^2.10.8",
     "typescript": "5.9.2"
   },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^9.15.9"
+    }
+  },
   "engines": {
     "node": ">=18"
   }
