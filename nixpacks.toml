@@ -1,0 +1,19 @@
+# Full Nixpacks build recipe. Railway cannot override Nixpacks' default
+# install phase (its pinned corepack@0.24.1 crashes on Node 24 when shimming
+# pnpm 11 — ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING), so this file replaces all
+# phases. pnpm is installed directly via npm: corepack never enters the picture.
+
+[phases.setup]
+nixPkgs = ["nodejs_24"]
+
+[phases.install]
+cmds = [
+  "npm install -g pnpm@11.20.0",
+  "pnpm i --frozen-lockfile"
+]
+
+[phases.build]
+cmds = ["pnpm --filter admin-api build"]
+
+[start]
+cmd = "pnpm --filter admin-api start"

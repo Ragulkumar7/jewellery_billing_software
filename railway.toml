@@ -1,15 +1,8 @@
-# Railway deploy config for the admin-api service.
-# Deploy this repo from its ROOT (do not set a subdirectory as the service root).
-# The server listens on process.env.PORT, which Railway injects automatically.
-#
-# installCommand MUST override Nixpacks' default: it pins corepack@0.24.1,
-# which crashes on Node 24 (ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING) when
-# shimming pnpm 11. Upgrading corepack first makes the workspace install work.
+# Railway service config. Build recipe lives in nixpacks.toml (full phase
+# control — Railway's config schema has no install-command hook).
 
 [build]
 builder = "NIXPACKS"
-installCommand = "npm install -g corepack@latest && corepack enable && corepack prepare pnpm@11.20.0 --activate && pnpm install --frozen-lockfile"
-buildCommand = "pnpm --filter admin-api build"
 
 [deploy]
 startCommand = "pnpm --filter admin-api start"
