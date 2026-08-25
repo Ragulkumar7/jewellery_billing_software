@@ -1,0 +1,23 @@
+# Railway config for the admin-api service (shared pnpm monorepo — deploy from
+# repo root, no root-directory override).
+# Builder is Railpack: it cannot see nixpacks.toml, so build/start are explicit here.
+# pnpm installs directly from the lockfile — corepack must never be re-introduced
+# into these commands (crashes on Node 24, ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING).
+
+[build]
+builder = "RAILPACK"
+buildCommand = "pnpm install --frozen-lockfile && pnpm --filter admin-api build"
+
+[deploy]
+startCommand = "pnpm --filter admin-api start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Rebuild only when the API or its workspace dependencies change.
+watchPatterns = [
+  "apps/admin-api/**",
+  "packages/config/**",
+  "packages/shopify/**",
+  "packages/types/**",
+  "packages/utils/**"
+]
