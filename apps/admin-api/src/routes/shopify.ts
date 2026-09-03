@@ -4,6 +4,7 @@ import { createShopifyClient, ShopifyApiError, type ShopifyConfig } from '@repo/
 import { env } from '@repo/config/env';
 import { pool } from '../db/pool.js';
 import { authenticate, requirePermission, type AuthenticatedRequest } from '../middleware/authorization.js';
+import { calculateFinalPrice, calculateUnitPrice, getCurrentSilverRate, isSilverRateValid, type PriceComponents } from '../services/pricing.js';
 
 const protectedRouter: RouterType = Router();
 const webhookRouter: RouterType = Router();
@@ -136,18 +137,10 @@ function buildSkuMap(products: ShopifyProduct[]): Map<string, SkuMatch> {
 }
 
 async function getSilverRate(): Promise<number> {
-  if (!pool) return 92.8;
-  const rate = (await pool.query('select rate_per_gram from silver_rates order by effective_date desc, effective_time desc limit 1')).rows[0];
-  return Number(rate?.rate_per_gram || 92.8);
-}
-
-// Single canonical price formula (ERP owns pricing):
-// metal value = net weight × silver rate; + making + stone + other charges;
-// then GST is added so the Shopify price is the customer-facing, tax-inclusive price.
-function computeShopifyPrice(product: { net_weight?: number; making_charge?: number; stone_charge?: number; other_charge?: number; gst_rate?: number }, silverRate: number): number {
-  const subtotal = Number(product.net_weight) * silverRate + Number(product.making_charge || 0) + Number(product.stone_charge || 0) + Number(product.other_charge || 0);
-  const price = subtotal + subtotal * (Number(product.gst_rate || 0) / 100);
-  return Math.round((price + Number.EPSILON) * 100) / 100;
+  if (!pool) throw new ShopifyApiError('DATABASE_URL is not configured');
+  const rate = await getCurrentSilverRate(pool);
+  if (!isSilverRateValid(rate)) throw new ShopifyApiError('Silver rate is not configured. Set a rate before syncing prices.');
+  return rate;
 }
 
 function buildProductSetInput(product: Record<string, any>, price: number, variantId: string | null) {
@@ -302,13 +295,13 @@ protectedRouter.post('/api/shopify/flags/:id/resolve', authenticate, requirePerm
   } catch (error) { return next(error); }
 });
 
-async function pushLocalProduct(client: ReturnType<typeof createShopifyClient>, product: Record<string, any>, context: { skuMap?: Map<string, SkuMatch>; silverRate?: number } = {}) {
+async function pushLocalProduct(client: ReturnType<typeof createShopifyClient>, product: PriceComponents & Record<string, any>, context: { skuMap?: Map<string, SkuMatch>; silverRate?: number } = {}) {
   if (!pool) throw new ShopifyApiError('DATABASE_URL is not configured');
   const sku = String(product.sku ?? '').trim();
   if (!sku) throw new ShopifyApiError(`Cannot sync ${product.name}: SKU is required`);
   if (Number(product.net_weight || 0) <= 0) throw new ShopifyApiError(`Cannot sync ${product.name}: Net Weight must be greater than 0`);
   const silverRate = context.silverRate ?? (await getSilverRate());
-  const price = computeShopifyPrice(product, silverRate);
+  const price = calculateFinalPrice(product, silverRate);
   if (price <= 0) throw new ShopifyApiError(`Cannot sync ${product.name}: calculated price must be greater than 0`);
   const skuMap = context.skuMap ?? buildSkuMap(await fetchAllShopifyProducts(client));
   const existing = skuMap.get(sku.toLowerCase());
@@ -715,7 +708,7 @@ async function importShopifyOrderAsDraft(order: ImportableShopifyOrder) {
     const product = (await pool.query('select * from products where lower(sku) = lower($1) limit 1', [sku])).rows[0];
     if (!product || product.status !== 'Active') { unmatched.push(sku); continue; }
     const quantity = Math.max(1, Math.floor(Number(line.quantity) || 0));
-    const unitPrice = round2(Number(product.net_weight) * rate + Number(product.making_charge) + Number(product.stone_charge) + Number(product.other_charge));
+    const unitPrice = calculateUnitPrice(product, rate);
     priced.push({ product, unitPrice, quantity, lineTotal: round2(unitPrice * quantity) });
   }
   if (!priced.length) {
@@ -789,7 +782,7 @@ async function reconcileProducts(client: ReturnType<typeof createShopifyClient>)
       missingInBilling.push({ sku: match.sku, title: match.productTitle, price: match.price, inventoryQuantity: match.inventoryQuantity });
       continue;
     }
-    const ourPrice = computeShopifyPrice(row, silverRate);
+    const ourPrice = calculateFinalPrice(row, silverRate);
     const priceDiff = Math.round((Math.abs(ourPrice - match.price) + Number.EPSILON) * 100) / 100;
     matched.push({ sku: row.sku, name: row.name, ourPrice, shopifyPrice: match.price, priceDiff });
     if (priceDiff > 0.01) priceMismatch.push({ sku: row.sku, name: row.name, ourPrice, shopifyPrice: match.price, diff: Math.round((ourPrice - match.price) * 100) / 100 });
@@ -800,7 +793,7 @@ async function reconcileProducts(client: ReturnType<typeof createShopifyClient>)
 
   for (const row of localWithSku) {
     if (row.status === 'Active' && !skuMap.has(String(row.sku).toLowerCase())) {
-      missingInShopify.push({ sku: row.sku, name: row.name, ourPrice: computeShopifyPrice(row, silverRate), stock: Number(row.stock_qty) });
+      missingInShopify.push({ sku: row.sku, name: row.name, ourPrice: calculateFinalPrice(row, silverRate), stock: Number(row.stock_qty) });
     }
   }
 
@@ -897,7 +890,7 @@ async function handleProductWebhook(topic: string, payload: Record<string, any>)
   if (match.rows[0]) {
     const product = (await pool.query('select id, name, sku, net_weight, making_charge, stone_charge, other_charge, gst_rate from products where id = $1', [match.rows[0].id])).rows[0];
     const silverRate = await getSilverRate();
-    const ourPrice = computeShopifyPrice(product, silverRate);
+    const ourPrice = calculateFinalPrice(product, silverRate);
     const externalChange = Math.abs(ourPrice - shopifyPrice) > 0.01 || (product.name && title !== product.name);
     if (externalChange) {
       await insertFlag({ productId: product.id, productSku: product.sku, direction: 'import', category: 'external_edit', severity: 'Warning', shopifyValue: `price=${shopifyPrice}`, ourValue: `price=${ourPrice}`, remarks: `External edit detected in Shopify for ${title}. ERP is authoritative and will restore values on the next sync.` });

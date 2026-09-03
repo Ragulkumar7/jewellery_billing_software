@@ -3,7 +3,8 @@ import {
   Search, Plus, Phone, Mail, MapPin, User, ShoppingBag, Wallet, X, Eye, Download, Pencil, Link2,
   Unlink, Star, Calendar, Users, Loader2,
 } from 'lucide-react';
-import { inr, type Customer, type Invoice, type Payment } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
+import { type Customer, type Invoice, type Payment } from '@/lib/types';
 import { Badge, EmptyState, Panel } from '@/components/ui';
 import { api } from '@/lib/api';
 

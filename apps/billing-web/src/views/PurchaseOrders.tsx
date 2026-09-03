@@ -3,7 +3,10 @@ import {
   CalendarDays, ChevronDown, ClipboardList, FileText, Plus, Search, X, Ban,
   CheckCircle2, Send, Wallet, Eye, Truck, AlertTriangle,
 } from 'lucide-react';
-import { inr, round2, type Product, type CartItem } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
+import { round2 } from '@/lib/math';
+import { type Product } from '@/lib/types';
+import { type CartItem } from '@/lib/sales';
 import { Badge, EmptyState, statusColor } from '@/components/ui';
 import { api } from '@/lib/api';
 

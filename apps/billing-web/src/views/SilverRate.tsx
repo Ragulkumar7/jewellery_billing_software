@@ -3,10 +3,13 @@ import {
   TrendingUp, Clock3, User, ArrowUpRight, ArrowDownRight, History, Save, Zap, CheckCircle,
   RefreshCw, Package, AlertTriangle, Eye, Loader2,
 } from 'lucide-react';
-import { inr, round2, type Product } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
+import { round2 } from '@/lib/math';
+import { type Product } from '@/lib/types';
 import { Badge, EmptyState, Panel } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useSilverRate } from '@/lib/silver-rate-context';
+import { calculateFinalPrice } from '@/lib/pricing';
 
 type RateHistoryEntry = {
   id: string;
@@ -53,13 +56,6 @@ export default function SilverRate() {
 
   const change = round2(currentRate - previousRate);
   const pctChange = previousRate > 0 ? ((change / previousRate) * 100).toFixed(2) : '0';
-
-  function calcPrice(p: Product, rate: number) {
-    const metalValue = round2(p.net_weight * rate);
-    const subtotal = metalValue + p.making_charge + p.stone_charge + p.other_charge;
-    const gst = round2(subtotal * (p.gst_rate / 100));
-    return round2(subtotal + gst);
-  }
 
   return (
     <div className="space-y-3">
@@ -193,7 +189,7 @@ function PriceImpactModal({ products, currentRate, newRate, onClose, onPublished
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const calcPrice = (p: Product, rate: number) => { const mv = round2(p.net_weight * rate); const sub = mv + p.making_charge + p.stone_charge + p.other_charge; return round2(sub + round2(sub * (p.gst_rate / 100))); };
+  const calcPrice = (p: Product, rate: number) => calculateFinalPrice(p, rate);
 
   async function publish() {
     setPublishing(true);

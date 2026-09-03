@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ComponentType } from 'react';
 import { TrendingUp, ShoppingBag, Wallet, Receipt, Users, Package, Download, ArrowUpRight, ArrowDownLeft, Percent, Building2, Store, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
-import { inr } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
 import { Panel, EmptyState } from '@/components/ui';
 
 type BusinessReportResponse = {

@@ -4,7 +4,9 @@ import {
   TrendingUp, Wallet, ShoppingCart, Receipt, X, Ban, RotateCcw, PauseCircle,
   PlayCircle, CreditCard, Settings2, AlertTriangle,
 } from 'lucide-react';
-import { supabase, computeCartTotals, computeUnitPrice, inr, type Product, type CartItem, type HeldBill, type Payment } from '@/lib/supabase';
+import { computeCartTotals, computeUnitPrice, type CartItem } from '@/lib/sales';
+import { inr } from '@/lib/currency';
+import { type Product, type HeldBill, type Payment } from '@/lib/types';
 import { importShopifyCustomer, searchCustomers, type CustomerSelection } from '@/lib/customer-search';
 import { Badge, EmptyState, Panel, statusColor } from '@/components/ui';
 import { API_URL, api } from '@/lib/api';
@@ -230,8 +232,8 @@ function CreateInvoice({ permissions, onBack, onView }: { permissions: Permissio
   useEffect(() => { setCart((prev) => prev.map((i) => ({ ...i, silver_rate: effectiveRate }))); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [effectiveRate]);
 
   async function loadHeld() {
-    const { data } = await supabase.from('held_bills').select('*').eq('status', 'Held').order('created_at', { ascending: false });
-    if (data) setHeldBills(data as HeldBill[]);
+    const data = await api<HeldBill[]>('/api/sales/held-bills?status=Held').catch(() => []);
+    setHeldBills(data || []);
   }
 
   function addToCart(p: Product) {
@@ -248,10 +250,13 @@ function CreateInvoice({ permissions, onBack, onView }: { permissions: Permissio
 
   async function holdBill() {
     if (cart.length === 0 || !customer) { setToast('Select a customer before holding the bill'); return; }
-    await supabase.from('held_bills').insert({
-      customer_id: customer.id, customer_name: customer.name, cart: JSON.stringify(cart),
-      subtotal: totals.subtotal, discount: totals.discount, grand_total: totals.grandTotal,
-      payment_method: payMethod, amount_paid: amountPaid, staff_name: 'Staff', notes,
+    await api('/api/sales/held-bills', {
+      method: 'POST',
+      body: JSON.stringify({
+        customerId: customer.id, customerName: customer.name, cart,
+        subtotal: totals.subtotal, discount: totals.discount, grandTotal: totals.grandTotal,
+        paymentMethod: payMethod, amountPaid, staffName: 'Staff', notes,
+      }),
     });
     setToast('Bill held successfully');
     clearCart();
@@ -266,7 +271,7 @@ function CreateInvoice({ permissions, onBack, onView }: { permissions: Permissio
     setPayMethod(b.payment_method || 'Cash');
     setAmountPaid(Number(b.amount_paid || 0));
     setCustomer(b.customer_id ? customers.find((c) => c.id === b.customer_id) || null : null);
-    await supabase.from('held_bills').update({ status: 'Resumed' }).eq('id', b.id);
+    await api(`/api/sales/held-bills/${b.id}/resume`, { method: 'POST' });
     loadHeld();
     setToast(`Bill ${b.reference} resumed`);
     setTimeout(() => setToast(null), 2000);

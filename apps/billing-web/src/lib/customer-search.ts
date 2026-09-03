@@ -1,4 +1,4 @@
-import { type Customer } from './supabase';
+import { type Customer } from './types';
 import { api } from './api';
 
 export type CustomerSelection = Customer & {

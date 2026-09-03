@@ -5,7 +5,7 @@ import {
   ShoppingCart, TrendingUp, Users, Wallet,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { inr } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
 import { useSilverRate } from '@/lib/silver-rate-context';
 
 // ---------- API response shapes (best-effort) ----------

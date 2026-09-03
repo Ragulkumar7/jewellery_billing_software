@@ -2,6 +2,7 @@ import { Router, type Router as RouterType } from "express";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/authorization.js";
+import { listStockMovements } from "../services/stock-movements.js";
 
 export const catalogRouter: RouterType = Router();
 
@@ -122,6 +123,21 @@ catalogRouter.post("/api/products/bulk-delete", authenticate, requirePermission(
     client.release();
     return next(error);
   }
+});
+
+catalogRouter.get("/api/products/:id/movements", authenticate, requirePermission("inventory.product.view"), async (req, res, next) => {
+  if (!pool) return res.status(503).json({ success: false, message: "DATABASE_URL is not configured" });
+  try {
+    const limit = Number(req.query.limit);
+    const data = await listStockMovements(pool, {
+      productId: req.params.id,
+      movementType: req.query.movementType ? String(req.query.movementType) : null,
+      startDate: req.query.from ? String(req.query.from) : null,
+      endDate: req.query.to ? String(req.query.to) : null,
+      limit: Number.isFinite(limit) ? limit : null,
+    });
+    res.json({ success: true, data });
+  } catch (error) { next(error); }
 });
 
 catalogRouter.get("/api/invoices", authenticate, requirePermission("sales.invoice.view"), async (req, res, next) => {

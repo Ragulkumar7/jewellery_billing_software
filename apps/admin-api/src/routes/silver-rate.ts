@@ -5,6 +5,7 @@ import { createShopifyClient } from '@repo/shopify';
 import { pool } from '../db/pool.js';
 import { authenticate, requirePermission, type AuthenticatedRequest } from '../middleware/authorization.js';
 import { syncProducts } from './shopify.js';
+import { calculateFinalPrice } from '../services/pricing.js';
 
 const router: RouterType = Router();
 const rateSchema = z.object({
@@ -111,17 +112,6 @@ router.post('/api/silver-rate', authenticate, requirePermission('silver_rate.upd
   }
 });
 
-// Price formula shared with the frontend Price Impact preview in SilverRate.tsx:
-//   metal value = net_weight × silver rate
-//   subtotal = metal value + making + stone + other charges
-//   price = subtotal + subtotal × (gst_rate / 100)
-function computeProductPrice(product: { net_weight: number | string; making_charge: number | string; stone_charge: number | string; other_charge: number | string; gst_rate: number | string }, rate: number): number {
-  const metalValue = Math.round((Number(product.net_weight) * rate + Number.EPSILON) * 100) / 100;
-  const subtotal = metalValue + Number(product.making_charge) + Number(product.stone_charge) + Number(product.other_charge);
-  const gst = Math.round((subtotal * (Number(product.gst_rate || 0) / 100) + Number.EPSILON) * 100) / 100;
-  return Math.round((subtotal + gst + Number.EPSILON) * 100) / 100;
-}
-
 // POST /api/silver-rate/publish — bulk-recalculate and persist derived product
 // prices for all affected products in a single transaction, audit-log the change,
 // then optionally push the new prices to Shopify.
@@ -147,7 +137,7 @@ router.post('/api/silver-rate/publish', authenticate, requirePermission('silver_
       : await client.query('select id, sku, net_weight, making_charge, stone_charge, other_charge, gst_rate from products where status = $1', ['Active']);
     affected = rows.length;
     for (const product of rows) {
-      const price = computeProductPrice(product, rate);
+      const price = calculateFinalPrice(product, rate);
       skus.push(product.sku);
       await client.query(
         'insert into product_price_snapshots (product_id, price, silver_rate, net_weight, computed_at, recorded_by) values ($1,$2,$3,$4,now(),$5)',

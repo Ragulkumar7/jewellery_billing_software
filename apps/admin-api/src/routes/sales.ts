@@ -2,6 +2,7 @@ import { Router, type Router as RouterType } from "express";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/authorization.js";
+import { calculateUnitPrice, getCurrentSilverRate, isSilverRateValid } from "../services/pricing.js";
 
 const lineSchema = z.object({
   productId: z.string().uuid(),
@@ -67,9 +68,10 @@ function hasPerm(req: AuthenticatedRequest, key: string): boolean {
 }
 
 // Canonical pricing engine — our system controls pricing, never Shopify.
-// Metal value = net weight × silver rate; + making + stone + other charges (from product master).
-function computeUnitPrice(product: { net_weight: string | number; making_charge: string | number; stone_charge: string | number; other_charge: string | number }, rate: number): number {
-  return round2(Number(product.net_weight) * rate + Number(product.making_charge) + Number(product.stone_charge) + Number(product.other_charge));
+async function currentSilverRate(client: { query(text: string): Promise<{ rows: any[] }> }): Promise<number> {
+  const rate = await getCurrentSilverRate(client);
+  if (!isSilverRateValid(rate)) throw new Error("Silver rate is not configured. Set a rate before creating an invoice.");
+  return rate;
 }
 
 function computeTotals(lines: { unitPrice: number; quantity: number; gstRate: number }[], discount: number) {
@@ -94,11 +96,6 @@ function computeTotals(lines: { unitPrice: number; quantity: number; gstRate: nu
   return { lines: allocated, subtotal, discount: safeDiscount, gstAmount, roundOff, grandTotal };
 }
 
-async function currentSilverRate(client: { query(text: string): Promise<{ rows: { rate_per_gram: string }[] }> }): Promise<number> {
-  const { rows } = await client.query("select rate_per_gram from silver_rates order by effective_date desc, effective_time desc, created_at desc limit 1");
-  return Number(rows[0]?.rate_per_gram || 92.8);
-}
-
 type InvoiceLine = { productId: string; quantity: number; priceOverride?: number | undefined; overrideReason?: string | undefined };
 
 // Build priced lines from products inside the active transaction (row-locked).
@@ -109,7 +106,7 @@ async function buildPricedLines(client: { query(text: string, values?: unknown[]
     const product = rows[0];
     if (!product || product.status !== "Active") throw new Error(`Product ${line.productId} is unavailable`);
     if (product.stock_qty < line.quantity) throw new Error(`Insufficient stock for ${product.name}`);
-    const unitPrice = line.priceOverride !== undefined ? round2(line.priceOverride) : computeUnitPrice(product, rate);
+    const unitPrice = line.priceOverride !== undefined ? round2(line.priceOverride) : calculateUnitPrice(product, rate);
     result.push({ product, unitPrice, quantity: line.quantity, lineTotal: round2(unitPrice * line.quantity) });
   }
   return result;
@@ -189,7 +186,7 @@ salesRouter.post("/api/sales/invoices", authenticate, requirePermission("sales.i
         const { rows } = await client.query("select * from products where id = $1", [line.productId]);
         const product = rows[0];
         if (!product || product.status !== "Active") throw new Error(`Product ${line.productId} is unavailable`);
-        const unitPrice = line.priceOverride !== undefined ? round2(line.priceOverride) : computeUnitPrice(product, rate);
+        const unitPrice = line.priceOverride !== undefined ? round2(line.priceOverride) : calculateUnitPrice(product, rate);
         const lineTotal = round2(unitPrice * line.quantity);
         grand += lineTotal;
         pricedForDraft.push({ product, unitPrice, quantity: line.quantity, lineTotal });
@@ -541,7 +538,7 @@ salesRouter.post("/api/sales/orders", authenticate, requirePermission("sales.ord
       const { rows } = await client.query("select * from products where id = $1", [line.productId]);
       const product = rows[0];
       if (!product || product.status !== "Active") throw new Error(`Product ${line.productId} is unavailable`);
-      const unitPrice = line.priceOverride !== undefined ? round2(line.priceOverride) : computeUnitPrice(product, rate);
+      const unitPrice = line.priceOverride !== undefined ? round2(line.priceOverride) : calculateUnitPrice(product, rate);
       priced.push({ product, unitPrice, quantity: line.quantity, lineTotal: round2(unitPrice * line.quantity) });
     }
     const totals = computeTotals(priced.map((l) => ({ unitPrice: l.unitPrice, quantity: l.quantity, gstRate: l.product.gst_rate })), input.discount);

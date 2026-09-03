@@ -12,6 +12,7 @@ import { settingsRouter } from "./settings.js";
 import { purchasesRouter } from "./purchases.js";
 import { accountsRouter } from "./accounts.js";
 import { reportsRouter } from "./reports.js";
+import { returnsRouter } from "./returns.js";
 
 export const routes: RouterType = Router();
 
@@ -28,4 +29,5 @@ routes.use(settingsRouter);
 routes.use(purchasesRouter);
 routes.use(accountsRouter);
 routes.use(reportsRouter);
+routes.use(returnsRouter);
 routes.use('/api/shopify/webhooks', shopifyWebhookRouter);

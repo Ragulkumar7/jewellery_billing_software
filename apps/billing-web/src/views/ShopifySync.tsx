@@ -5,9 +5,11 @@ import {
   ChevronDown, Circle, Clock3, Package, RefreshCw, RotateCw, Scale, Search, Settings2,
   ShoppingBag, SlidersHorizontal, Users, Wifi, X, Zap,
 } from 'lucide-react';
-import { inr, type Customer, type Product, type ReconciliationResult, type ShopifySyncFlag, type ShopifySyncLog } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
+import { type Customer, type Product, type ReconciliationResult, type ShopifySyncFlag, type ShopifySyncLog } from '@/lib/types';
 import { api } from '@/lib/api';
 import { Badge, EmptyState } from '@/components/ui';
+import { calculateFinalPrice } from '@/lib/pricing';
 
 const tabs = [
   { key: 'overview', label: 'Overview', icon: Wifi },
@@ -23,11 +25,6 @@ type Tab = (typeof tabs)[number]['key'];
 
 type ShopifyStatus = { configured: boolean; connected: boolean; storeName?: string; storeDomain?: string; apiVersion?: string; message?: string };
 
-function computePrice(product: Product, silverRate: number): number {
-  const subtotal = Number(product.net_weight) * silverRate + Number(product.making_charge || 0) + Number(product.stone_charge || 0) + Number(product.other_charge || 0);
-  return Math.round((subtotal * (1 + Number(product.gst_rate || 0) / 100) + Number.EPSILON) * 100) / 100;
-}
-
 export default function ShopifySync() {
   const [tab, setTab] = useState<Tab>('overview');
   const [products, setProducts] = useState<Product[]>([]);
@@ -35,7 +32,7 @@ export default function ShopifySync() {
   const [flags, setFlags] = useState<ShopifySyncFlag[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [reconcile, setReconcile] = useState<ReconciliationResult | null>(null);
-  const [silverRate, setSilverRate] = useState(92.8);
+  const [silverRate, setSilverRate] = useState<number | null>(null);
   const [query, setQuery] = useState('');
   const [syncOpen, setSyncOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -52,13 +49,14 @@ export default function ShopifySync() {
       api<ShopifySyncLog[]>('/api/shopify/logs?limit=120').catch(() => []),
       api<ShopifySyncFlag[]>('/api/shopify/flags').catch(() => []),
       api<Customer[]>('/api/customers?limit=200').catch(() => []),
-      api<{ currentRate: number }>('/api/silver-rate').catch(() => null),
+      api<{ currentRate: number | null; previousRate?: number | null; configured?: boolean }>('/api/silver-rate').catch(() => null),
     ]);
     setProducts(productData);
     setLogs(logData);
     setFlags(flagData);
     setCustomers(customerData);
-    if (rate) setSilverRate(rate.currentRate);
+    if (rate && typeof rate.currentRate === 'number' && rate.currentRate > 0) setSilverRate(rate.currentRate);
+    else setSilverRate(null);
     try { setConnection(await api<ShopifyStatus>('/api/shopify/status')); } catch { setConnection({ configured: false, connected: false, message: 'API unavailable' }); }
   }
 
@@ -187,9 +185,15 @@ export default function ShopifySync() {
 
       <nav className="flex gap-1 overflow-x-auto rounded-xl border border-slate-100 bg-white p-1.5 shadow-sm">
         {tabs.map(({ key, label, icon: Icon }) => <button key={key} onClick={() => setTab(key)} className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-[10px] font-bold ${tab === key ? 'bg-[#4714a1] text-white' : 'text-slate-600 hover:bg-slate-50'}`}><Icon size={13} />{label}{key === 'errors' && failedLogs.length > 0 && <span className="rounded-full bg-red-100 px-1.5 text-[8px] text-red-600">{failedLogs.length}</span>}{key === 'flags' && openFlags.length > 0 && <span className="rounded-full bg-orange-100 px-1.5 text-[8px] text-orange-600">{openFlags.length}</span>}</button>)}
-      </nav>
+            </nav>
 
-      {tab === 'overview' && <Overview connectionHealthy={connectionHealthy} lastSuccess={lastSuccess} failedLogs={failedLogs} openFlags={openFlags} products={products} syncedProducts={syncedProducts} pendingProducts={pendingProducts} orderCount={orderLogs.length} customerCount={customers.length} logs={logs} onTab={setTab} onSync={() => runSync('Everything')} onReconcile={() => { setTab('reconciliation'); void runReconcile(); }} />}
+      {silverRate === null && (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700">
+          <AlertTriangle size={14} /> Silver rate is not configured. ERP prices cannot be shown or pushed until a silver rate is set.
+        </div>
+      )}
+
+      {tab === 'overview' && <Overview connectionHealthy={connectionHealthy} lastSuccess={lastSuccess}        failedLogs={failedLogs} openFlags={openFlags} products={products} syncedProducts={syncedProducts} pendingProducts={pendingProducts} orderCount={orderLogs.length} customerCount={customers.length} logs={logs} onTab={setTab} onSync={() => runSync('Everything')} onReconcile={() => { setTab('reconciliation'); void runReconcile(); }} />}
       {tab === 'products' && <ProductsView products={products} logs={productLogs} reconcile={reconcile} silverRate={silverRate} query={query} setQuery={setQuery} syncBadge={syncBadge} onSync={syncProduct} onSyncAll={() => runSync('Products')} onRetry={retry} />}
       {tab === 'inventory' && <InventoryView products={products} logs={inventoryLogs} reconcile={reconcile} syncBadge={syncBadge} onSync={() => runSync('Inventory')} onRetry={retry} />}
       {tab === 'orders' && <OrdersView logs={orderLogs} syncBadge={syncBadge} onSync={() => runSync('Orders')} onRetry={retry} />}
@@ -222,14 +226,14 @@ function Overview({ connectionHealthy, lastSuccess, failedLogs, openFlags, produ
   </div>;
 }
 
-function ProductsView({ products, logs, reconcile, silverRate, query, setQuery, syncBadge, onSync, onSyncAll, onRetry }: { products: Product[]; logs: ShopifySyncLog[]; reconcile: ReconciliationResult | null; silverRate: number; query: string; setQuery: (value: string) => void; syncBadge: (status: string) => ReactNode; onSync: (product: Product) => void; onSyncAll: () => void; onRetry: (log: ShopifySyncLog) => void }) {
+function ProductsView({ products, logs, reconcile, silverRate, query, setQuery, syncBadge, onSync, onSyncAll, onRetry }: { products: Product[]; logs: ShopifySyncLog[]; reconcile: ReconciliationResult | null; silverRate: number | null; query: string; setQuery: (value: string) => void; syncBadge: (status: string) => ReactNode; onSync: (product: Product) => void; onSyncAll: () => void; onRetry: (log: ShopifySyncLog) => void }) {
   const filtered = products.filter((product) => !query || [product.name, product.sku].some((value) => value.toLowerCase().includes(query.toLowerCase())));
   const priceBySku = new Map<string, { ourPrice: number; shopifyPrice: number }>();
   for (const match of reconcile?.details.matched ?? []) priceBySku.set(match.sku, { ourPrice: match.ourPrice, shopifyPrice: match.shopifyPrice });
   const synced = products.filter((product) => product.shopify_sync_status === 'Synced').length;
   const pending = products.filter((product) => product.shopify_sync_status === 'Pending').length;
   const failed = products.filter((product) => product.shopify_sync_status === 'Failed').length;
-  return <EntitySection title="Products" description="Our product master owns name, SKU, price and publishing status. Changes flow from Opal Line Jewelry to Shopify." action={<button onClick={onSyncAll} className="flex items-center gap-1.5 rounded-md bg-[#4714a1] px-3 py-2 text-[10px] font-bold text-white"><Zap size={12} /> Sync All</button>}><div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-4">{[['Total', products.length, 'slate'], ['Synced', synced, 'green'], ['Pending', pending, 'amber'], ['Failed', failed, 'red']].map(([label, value, color]) => <div key={label as string} className="rounded-lg bg-slate-50 p-3"><p className="text-[9px] font-semibold text-slate-400">{label as string}</p><p className="mt-1 text-lg font-bold">{value as number}</p><div className="mt-1">{syncBadge(color === 'green' ? 'Synced' : color === 'red' ? 'Failed' : color === 'amber' ? 'Pending' : 'Total')}</div></div>)}</div><SearchBox value={query} onChange={setQuery} placeholder="Search product or SKU..." /><div className="mt-3 overflow-x-auto"><table className="w-full text-[11px]"><thead className="bg-slate-50 text-[9px] uppercase tracking-wider text-slate-400"><tr>{['Product', 'SKU', 'Our Price', 'Shopify Price', 'Stock', 'Shopify ID', 'Status', 'Actions'].map((heading) => <th key={heading} className="px-3 py-2.5 text-left font-bold">{heading}</th>)}</tr></thead><tbody>{filtered.map((product) => { const failedLog = logs.find((log) => log.entity_id === product.sku && log.status === 'Failed'); const pricing = priceBySku.get(product.sku); const ourPrice = Number(product.net_weight) > 0 ? computePrice(product, silverRate) : null; return <tr key={product.id} className="border-t border-slate-50 hover:bg-slate-50/60"><td className="px-3 py-2.5 font-bold">{product.name}</td><td className="px-3 py-2.5 text-slate-500">{product.sku}</td><td className="px-3 py-2.5 font-bold">{ourPrice !== null ? inr(ourPrice) : '—'}</td><td className="px-3 py-2.5 text-slate-500">{pricing ? inr(pricing.shopifyPrice) : product.shopify_sync_status === 'Synced' ? 'Synced' : 'Not reported'}</td><td className="px-3 py-2.5">{product.stock_qty}</td><td className="px-3 py-2.5 text-[9px] text-slate-400">{product.shopify_product_id ? product.shopify_product_id.split('/').pop() : 'Not linked'}</td><td className="px-3 py-2.5">{syncBadge(product.shopify_sync_status)}</td><td className="px-3 py-2.5"><div className="flex gap-1.5"><button onClick={() => onSync(product)} className="rounded-md bg-purple-50 px-2 py-1 text-[9px] font-bold text-[#6f39bd]">Reconcile</button>{failedLog && <button onClick={() => onRetry(failedLog)} className="rounded-md bg-orange-50 px-2 py-1 text-[9px] font-bold text-orange-600">Retry</button>}</div></td></tr>; })}</tbody></table>{filtered.length === 0 && <EmptyState message="No products match your search" />}</div></EntitySection>;
+  return <EntitySection title="Products" description="Our product master owns name, SKU, price and publishing status. Changes flow from Opal Line Jewelry to Shopify." action={<button onClick={onSyncAll} className="flex items-center gap-1.5 rounded-md bg-[#4714a1] px-3 py-2 text-[10px] font-bold text-white"><Zap size={12} /> Sync All</button>}><div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-4">{[['Total', products.length, 'slate'], ['Synced', synced, 'green'], ['Pending', pending, 'amber'], ['Failed', failed, 'red']].map(([label, value, color]) => <div key={label as string} className="rounded-lg bg-slate-50 p-3"><p className="text-[9px] font-semibold text-slate-400">{label as string}</p><p className="mt-1 text-lg font-bold">{value as number}</p><div className="mt-1">{syncBadge(color === 'green' ? 'Synced' : color === 'red' ? 'Failed' : color === 'amber' ? 'Pending' : 'Total')}</div></div>)}</div><SearchBox value={query} onChange={setQuery} placeholder="Search product or SKU..." /><div className="mt-3 overflow-x-auto"><table className="w-full text-[11px]"><thead className="bg-slate-50 text-[9px] uppercase tracking-wider text-slate-400"><tr>{['Product', 'SKU', 'Our Price', 'Shopify Price', 'Stock', 'Shopify ID', 'Status', 'Actions'].map((heading) => <th key={heading} className="px-3 py-2.5 text-left font-bold">{heading}</th>)}</tr></thead><tbody>{filtered.map((product) => { const failedLog = logs.find((log) => log.entity_id === product.sku && log.status === 'Failed'); const pricing = priceBySku.get(product.sku); const ourPrice = silverRate !== null && Number(product.net_weight) > 0 ? calculateFinalPrice(product, silverRate) : null; return <tr key={product.id} className="border-t border-slate-50 hover:bg-slate-50/60"><td className="px-3 py-2.5 font-bold">{product.name}</td><td className="px-3 py-2.5 text-slate-500">{product.sku}</td><td className="px-3 py-2.5 font-bold">{ourPrice !== null ? inr(ourPrice) : '—'}</td><td className="px-3 py-2.5 text-slate-500">{pricing ? inr(pricing.shopifyPrice) : product.shopify_sync_status === 'Synced' ? 'Synced' : 'Not reported'}</td><td className="px-3 py-2.5">{product.stock_qty}</td><td className="px-3 py-2.5 text-[9px] text-slate-400">{product.shopify_product_id ? product.shopify_product_id.split('/').pop() : 'Not linked'}</td><td className="px-3 py-2.5">{syncBadge(product.shopify_sync_status)}</td><td className="px-3 py-2.5"><div className="flex gap-1.5"><button onClick={() => onSync(product)} className="rounded-md bg-purple-50 px-2 py-1 text-[9px] font-bold text-[#6f39bd]">Reconcile</button>{failedLog && <button onClick={() => onRetry(failedLog)} className="rounded-md bg-orange-50 px-2 py-1 text-[9px] font-bold text-orange-600">Retry</button>}</div></td></tr>; })}</tbody></table>{filtered.length === 0 && <EmptyState message="No products match your search" />}</div></EntitySection>;
 }
 
 function InventoryView({ products, logs, reconcile, syncBadge, onSync, onRetry }: { products: Product[]; logs: ShopifySyncLog[]; reconcile: ReconciliationResult | null; syncBadge: (status: string) => ReactNode; onSync: () => void; onRetry: (log: ShopifySyncLog) => void }) {
@@ -248,7 +252,7 @@ function CustomersView({ customers, logs, query, setQuery, syncBadge, onSync, on
   return <EntitySection title="Customers" description="Shopify owns online customer identities. Linked profiles keep Shopify Customer IDs alongside our internal customer record for unified sales billing." action={<button onClick={onSync} className="flex items-center gap-1.5 rounded-md bg-[#4714a1] px-3 py-2 text-[10px] font-bold text-white"><RefreshCw size={12} /> Sync Customers</button>}>{blocked && <div className="mb-4 flex items-center gap-3 rounded-lg bg-orange-50 p-4 text-[11px] text-orange-700"><AlertTriangle size={18} /><span><b>Automated customer sync is unavailable on this store plan</b> (Shopify PII restriction). Create customers manually at the counter — Shopify orders link automatically when customer details are available.</span></div>}<SearchBox value={query} onChange={setQuery} placeholder="Search customer by name, mobile, email..." /><div className="mt-3 overflow-x-auto"><table className="w-full text-[11px]"><thead className="bg-slate-50 text-[9px] uppercase tracking-wider text-slate-400"><tr>{['Customer', 'Email', 'Source', 'Shopify ID', 'Purchase History', 'Status', 'Action'].map((heading) => <th key={heading} className="px-3 py-2.5 text-left font-bold">{heading}</th>)}</tr></thead><tbody>{rows.map((customer) => { const log = logs.find((item) => item.entity_id === customer.shopify_customer_id); return <tr key={customer.id} className="border-t border-slate-50"><td className="px-3 py-2.5 font-bold">{customer.name}</td><td className="px-3 py-2.5 text-slate-500">{customer.email || '—'}</td><td className="px-3 py-2.5"><Badge color={customer.source === 'Internal' ? 'slate' : customer.source === 'Linked' ? 'green' : 'violet'}>{customer.source === 'Internal' ? 'Internal' : customer.source === 'Linked' ? 'Shopify + Internal' : 'Shopify'}</Badge></td><td className="px-3 py-2.5 text-slate-500">{customer.shopify_customer_id ? '#' + customer.shopify_customer_id.split('/').pop() : '—'}</td><td className="px-3 py-2.5">{customer.source === 'Shopify' ? `${customer.shopify_total_orders ?? 0} orders · ${inr(customer.total_purchases ?? 0)}` : `${customer.invoice_count ?? 0} invoices · ${inr(customer.total_paid ?? 0)} paid`}</td><td className="px-3 py-2.5">{customer.shopify_customer_id ? <Badge color="green">Linked</Badge> : <Badge color="slate">—</Badge>}</td><td className="px-3 py-2.5">{log?.status === 'Failed' && <button onClick={() => onRetry(log)} className="font-bold text-orange-600">Retry</button>}</td></tr>; })}</tbody></table>{rows.length === 0 && <EmptyState message="No customers match your search" />}</div></EntitySection>;
 }
 
-function ReconciliationView({ result, busy, silverRate, onRun, onPushProducts, onPushInventory }: { result: ReconciliationResult | null; busy: boolean; silverRate: number; onRun: () => void; onPushProducts: () => void; onPushInventory: () => void }) {
+function ReconciliationView({ result, busy, silverRate, onRun, onPushProducts, onPushInventory }: { result: ReconciliationResult | null; busy: boolean; silverRate: number | null; onRun: () => void; onPushProducts: () => void; onPushInventory: () => void }) {
   if (!result) return <EntitySection title="Reconciliation" description="Compare the ERP product master against Shopify. Missing records and price or stock mismatches are surfaced before any write is made." action={<button onClick={onRun} disabled={busy} className="flex items-center gap-1.5 rounded-md bg-[#4714a1] px-3 py-2 text-[10px] font-bold text-white disabled:opacity-60"><Scale size={12} /> {busy ? 'Comparing...' : 'Run Reconciliation'}</button>}><EmptyState message="Run a reconciliation to compare ERP and Shopify product data" /></EntitySection>;
   const s = result.summary;
   const cards = [

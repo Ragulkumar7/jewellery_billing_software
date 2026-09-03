@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Search, Plus, RotateCcw, FileText, Eye, X, ChevronRight, Wallet, AlertCircle, CheckCircle2,
 } from 'lucide-react';
-import { supabase, inr, type SalesReturn, type ReturnItem, type Invoice, type InvoiceItem } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
+import { type SalesReturn, type ReturnItem, type Invoice, type InvoiceItem } from '@/lib/types';
 import { Badge, EmptyState, Panel, statusColor } from '@/components/ui';
+import { api } from '@/lib/api';
 
 export default function Returns() {
   const [returns, setReturns] = useState<SalesReturn[]>([]);
@@ -11,11 +13,13 @@ export default function Returns() {
   const [showCreate, setShowCreate] = useState(false);
   const [selected, setSelected] = useState<SalesReturn | null>(null);
   const [items, setItems] = useState<ReturnItem[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => { load(); }, []);
   async function load() {
-    const { data } = await supabase.from('sales_returns').select('*').order('created_at', { ascending: false });
-    if (data) setReturns(data as SalesReturn[]);
+    try {
+      setReturns(await api<SalesReturn[]>('/api/sales/returns?limit=100'));
+    } catch { setReturns([]); }
   }
 
   const filtered = useMemo(() => {
@@ -33,8 +37,11 @@ export default function Returns() {
 
   async function openDetail(r: SalesReturn) {
     setSelected(r);
-    const { data } = await supabase.from('return_items').select('*').eq('return_id', r.id);
-    setItems(data as ReturnItem[] || []);
+    try {
+      const data = await api<{ salesReturn: SalesReturn; items: ReturnItem[] }>(`/api/sales/returns/${r.id}`);
+      setItems(data.items || []);
+      setSelected(data.salesReturn);
+    } catch { setItems([]); }
   }
 
   if (selected) return <ReturnDetail ret={selected} items={items} onBack={() => setSelected(null)} />;
@@ -78,7 +85,7 @@ export default function Returns() {
                 <tr key={r.id} className="border-t border-slate-50 hover:bg-slate-50/50">
                   <td className="px-3 py-2.5 font-bold text-[#5419b5]">{r.return_number}</td>
                   <td className="px-3 py-2.5 text-slate-500">{r.return_date}</td>
-                  <td className="px-3 py-2.5 text-slate-500">{lookupInvoiceNumber(r.invoice_id)}</td>
+                  <td className="px-3 py-2.5 text-slate-500">{(r as SalesReturn & { invoice_number?: string }).invoice_number || '—'}</td>
                   <td className="px-3 py-2.5">{r.customer_name || '—'}</td>
                   <td className="px-3 py-2.5"><Badge color={r.return_type === 'Full' ? 'amber' : 'blue'}>{r.return_type}</Badge></td>
                   <td className="px-3 py-2.5"><Badge color={r.refund_type === 'Refund' ? 'green' : r.refund_type === 'Exchange' ? 'blue' : 'violet'}>{r.refund_type}</Badge></td>
@@ -92,16 +99,10 @@ export default function Returns() {
           {filtered.length === 0 && <EmptyState message="No returns recorded yet" />}
         </div>
       </div>
+      {toast && <div className="fixed bottom-6 right-6 z-50 rounded-lg bg-[#1d2945] px-4 py-3 text-xs font-semibold text-white shadow-xl">{toast}</div>}
     </div>
   );
-
-  function lookupInvoiceNumber(id: string): string {
-    // cached invoice number lookup
-    return invoiceCache[id] || id.slice(0, 8);
-  }
 }
-
-const invoiceCache: Record<string, string> = {};
 
 function ReturnDetail({ ret, items, onBack }: { ret: SalesReturn; items: ReturnItem[]; onBack: () => void }) {
   return (
@@ -134,7 +135,7 @@ function ReturnDetail({ ret, items, onBack }: { ret: SalesReturn; items: ReturnI
         <div className="space-y-3">
           <Panel title="Return Details" icon={FileText}>
             <div className="space-y-2 text-[11px]">
-              {[['Return Type', ret.return_type], ['Refund Type', ret.refund_type], ['Return Date', ret.return_date], ['Customer', ret.customer_name || '—'], ['Processed By', ret.processed_by]].map(([k,v]) => <div key={k} className="flex justify-between"><span className="text-slate-500">{k}</span><b>{v}</b></div>)}
+              {[['Return Type', ret.return_type], ['Refund Type', ret.refund_type], ['Return Date', ret.return_date], ['Customer', ret.customer_name || '—'], ['Processed By', ret.processed_by || '—']].map(([k,v]) => <div key={k} className="flex justify-between"><span className="text-slate-500">{k}</span><b>{v}</b></div>)}
               {ret.reason && <div className="rounded-md bg-slate-50 p-2 text-[10px] text-slate-500"><b>Reason:</b> {ret.reason}</div>}
             </div>
           </Panel>
@@ -159,14 +160,16 @@ function CreateReturn({ onBack }: { onBack: () => void }) {
 
   useEffect(() => { loadInvoices(); }, []);
   async function loadInvoices() {
-    const { data } = await supabase.from('invoices').select('*').in('status', ['Paid', 'Partially Paid', 'Unpaid']).order('created_at', { ascending: false }).limit(50);
-    if (data) { setInvoices(data as Invoice[]); data.forEach((i: any) => { invoiceCache[i.id] = i.invoice_number; }); }
+    try {
+      setInvoices(await api<Invoice[]>('/api/sales/returns/eligible-invoices'));
+    } catch (e) { setToast('Error: ' + (e instanceof Error ? e.message : 'Unable to load invoices')); }
   }
 
   async function selectInvoice(inv: Invoice) {
     setSelectedInv(inv);
-    const { data } = await supabase.from('invoice_items').select('*').eq('invoice_id', inv.id);
-    setInvItems(data as InvoiceItem[] || []);
+    try {
+      setInvItems(await api<InvoiceItem[]>(`/api/sales/invoices/${inv.id}/items`));
+    } catch { setInvItems([]); }
     setReturnQtys({});
   }
 
@@ -183,23 +186,33 @@ function CreateReturn({ onBack }: { onBack: () => void }) {
 
   async function processReturn() {
     if (!selectedInv || selectedItems.length === 0) return;
-    const ret = {
-      invoice_id: selectedInv.id, return_type: isFull ? 'Full' : 'Partial', refund_type: refundType,
-      customer_id: selectedInv.customer_id, customer_name: selectedInv.customer_name, reason,
-      subtotal: returnSubtotal, gst_amount: returnGst, grand_total: returnTotal,
-      status: 'Processed', processed_by: 'Humend Admin',
+    const payload = {
+      invoiceId: selectedInv.id,
+      returnType: isFull ? 'Full' : 'Partial',
+      refundType,
+      customerId: selectedInv.customer_id,
+      customerName: selectedInv.customer_name,
+      reason,
+      subtotal: returnSubtotal,
+      gstAmount: returnGst,
+      grandTotal: returnTotal,
+      items: selectedItems.map((it) => ({
+        invoiceItemId: it.id,
+        productId: it.product_id,
+        sku: it.sku,
+        name: it.name,
+        quantity: returnQtys[it.id],
+        unitPrice: it.unit_price,
+        lineTotal: it.unit_price * (returnQtys[it.id] || 0),
+      })),
     };
-    const { data, error } = await supabase.from('sales_returns').insert(ret).select().single();
-    if (error) { setToast('Error: ' + error.message); return; }
-    const retId = (data as any).id;
-    await supabase.from('return_items').insert(selectedItems.map((it) => ({
-      return_id: retId, invoice_item_id: it.id, product_id: it.product_id, sku: it.sku, name: it.name,
-      quantity: returnQtys[it.id], unit_price: it.unit_price, line_total: it.unit_price * (returnQtys[it.id] || 0),
-    })));
-    // restock
-    for (const it of selectedItems) { if (it.product_id) await supabase.from('products').update({ stock_qty: (await supabase.from('products').select('stock_qty').eq('id', it.product_id).maybeSingle()).data?.stock_qty + (returnQtys[it.id] || 0) }).eq('id', it.product_id); }
-    setToast(`Return ${(data as any).return_number} processed`);
-    setTimeout(() => onBack(), 1500);
+    try {
+      const created = await api<SalesReturn>('/api/sales/returns', { method: 'POST', body: JSON.stringify(payload) });
+      setToast(`Return ${created.return_number} processed`);
+      setTimeout(() => onBack(), 1500);
+    } catch (e) {
+      setToast('Error: ' + (e instanceof Error ? e.message : 'Unable to process return'));
+    }
   }
 
   return (

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ComponentType } from 'react';
 import { Search, Download, Printer, Eye, TrendingUp, ShoppingBag, Wallet, Percent, RotateCcw, Receipt } from 'lucide-react';
 import { api } from '@/lib/api';
-import { inr } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
 import { Badge, EmptyState, Panel, statusColor } from '@/components/ui';
 
 type SalesReportResponse = {

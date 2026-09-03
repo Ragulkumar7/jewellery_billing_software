@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, AlertTriangle, Package, ShoppingCart, History, Eye, CheckCircle, XCircle, Plus } from 'lucide-react';
 import { api } from '@/lib/api';
-import { type Product } from '@/lib/supabase';
+import { type Product } from '@/lib/types';
 import { Badge, EmptyState, Panel } from '@/components/ui';
 
 export default function LowStockAlert({ onNavigate }: { onNavigate: (v: string) => void }) {

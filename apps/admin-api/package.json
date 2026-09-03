@@ -9,7 +9,8 @@
     "register-webhooks": "tsx scripts/register-webhooks.ts",
     "build": "tsup src/index.ts --format esm",
     "start": "node dist/index.js",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test": "tsx --test src/services/pricing.test.ts src/services/stock-movements.test.ts"
   },
   "dependencies": {
     "@repo/config": "workspace:*",

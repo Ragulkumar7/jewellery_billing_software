@@ -1,6 +1,7 @@
 import { Router, type Router as RouterType } from "express";
 import { pool } from "../db/pool.js";
 import { authenticate, requirePermission } from "../middleware/authorization.js";
+import { getCurrentSilverRate, isSilverRateValid } from "../services/pricing.js";
 
 export const reportsRouter: RouterType = Router();
 
@@ -20,9 +21,10 @@ function dateSourceConds(from: string, to: string, source: string, dateCol: stri
 }
 
 async function currentSilverRate(): Promise<number> {
-  if (!pool) return 92.8;
-  const { rows } = await pool.query("select rate_per_gram from silver_rates order by effective_date desc, effective_time desc, created_at desc limit 1");
-  return Number(rows[0]?.rate_per_gram || 92.8);
+  if (!pool) throw new Error("DATABASE_URL is not configured");
+  const rate = await getCurrentSilverRate(pool);
+  if (!isSilverRateValid(rate)) throw new Error("Silver rate is not configured. The report cannot be valued without a rate.");
+  return rate;
 }
 
 // ---------- Sales Report ----------

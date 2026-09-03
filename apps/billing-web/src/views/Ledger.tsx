@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Search, FileText, ArrowDownLeft, ArrowUpRight, TrendingUp, Download, Eye, X, ExternalLink } from 'lucide-react';
-import { inr } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
 import { Badge, EmptyState, Panel } from '@/components/ui';
 import { api } from '@/lib/api';
 

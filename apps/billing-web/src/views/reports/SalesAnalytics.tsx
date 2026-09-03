@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ComponentType } from 'react';
 import { TrendingUp, ShoppingBag, Users, Package, CreditCard, Gem, Percent, Download, Award, AlertTriangle, Store } from 'lucide-react';
 import { api } from '@/lib/api';
-import { inr } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
 import { Panel, EmptyState, Badge } from '@/components/ui';
 
 type AnalyticsResponse = {

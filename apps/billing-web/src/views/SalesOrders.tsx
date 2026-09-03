@@ -3,7 +3,9 @@ import {
   CalendarDays, ChevronDown, ClipboardList, FileText, Plus, Search, X, Ban,
   CheckCircle2, ArrowRightCircle, Wallet, AlertTriangle, Eye,
 } from 'lucide-react';
-import { computeCartTotals, computeUnitPrice, inr, type Product, type CartItem } from '@/lib/supabase';
+import { computeCartTotals, computeUnitPrice, type CartItem } from '@/lib/sales';
+import { inr } from '@/lib/currency';
+import { type Product } from '@/lib/types';
 import { importShopifyCustomer, searchCustomers, type CustomerSelection } from '@/lib/customer-search';
 import { Badge, EmptyState, statusColor } from '@/components/ui';
 import { api } from '@/lib/api';

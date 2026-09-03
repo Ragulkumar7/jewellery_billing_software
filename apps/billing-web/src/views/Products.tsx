@@ -3,9 +3,12 @@ import {
   Search, Plus, Gem, X, Eye, Pencil, Download, RefreshCw, Power, Tag, Scale,
   Boxes, TrendingUp, AlertTriangle, Package, ShoppingCart, Trash2,
 } from 'lucide-react';
-import { supabase, inr, round2, type Product, type StockHistory } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
+import { round2 } from '@/lib/math';
+import { type Product, type StockHistory } from '@/lib/types';
 import { api } from '@/lib/api';
 import { useSilverRate } from '@/lib/silver-rate-context';
+import { calculateUnitPrice } from '@/lib/pricing';
 import { Badge, EmptyState, Panel, statusColor } from '@/components/ui';
 
 export default function Products() {
@@ -87,7 +90,7 @@ export default function Products() {
   }
 
   function calcPrice(p: Product, rate: number) {
-    return round2((rate + p.making_charge) * p.net_weight);
+    return calculateUnitPrice(p, rate);
   }
 
   return (
@@ -203,12 +206,14 @@ function ProductDetail({ product: initialProduct, onBack, onEdit }: { product: P
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.from('stock_history').select('*').eq('product_id', product.id).order('created_at', { ascending: false }).then(({ data }) => setHistory((data as StockHistory[]) || []));
+    api<StockHistory[]>(`/api/products/${product.id}/movements?limit=50`).then(setHistory).catch(() => setHistory([]));
   }, [product.id]);
 
   const metalValue = round2(product.net_weight * rate);
-  const makingValue = round2(product.net_weight * product.making_charge);
-  const subtotal = round2((rate + product.making_charge) * product.net_weight);
+  const makingValue = round2(Number(product.making_charge) || 0);
+  const stoneValue = round2(Number(product.stone_charge) || 0);
+  const otherValue = round2(Number(product.other_charge) || 0);
+  const subtotal = calculateUnitPrice(product, rate);
 
   async function syncToShopify() {
     setSyncing(true);
@@ -248,8 +253,8 @@ function ProductDetail({ product: initialProduct, onBack, onEdit }: { product: P
 
         <Panel title="Pricing Breakdown" icon={Tag}>
           <div className="space-y-2 text-[11px]">
-             {[['Current Silver Rate', `₹${rate.toFixed(2)} / gm`], ['Net Weight', `${product.net_weight.toFixed(3)} gm`], ['Silver / Metal Value', inr(metalValue)], ['Making Rate', inr(product.making_charge) + ' / gm'], ['Making Value', inr(makingValue)], ['Formula', '(Silver rate + making rate) × grams'], ['Price', inr(subtotal)]].map(([k, v]) => <div key={k} className="flex justify-between border-b border-slate-50 pb-1.5"><span className="text-slate-500">{k}</span><b>{v}</b></div>)}
-             <div className="flex justify-between pt-2"><span className="font-bold">Selling Price</span><span className="text-sm font-bold text-[#5419b5]">{inr(subtotal)}</span></div>
+             {[['Current Silver Rate', `₹${rate.toFixed(2)} / gm`], ['Net Weight', `${product.net_weight.toFixed(3)} gm`], ['Silver / Metal Value', inr(metalValue)], ['Making Charge', inr(makingValue)], ['Stone Charge', inr(stoneValue)], ['Other Charges', inr(otherValue)], ['Unit Price', inr(subtotal)]].map(([k, v]) => <div key={k} className="flex justify-between border-b border-slate-50 pb-1.5"><span className="text-slate-500">{k}</span><b>{v}</b></div>)}
+             <div className="flex justify-between pt-2"><span className="font-bold">Selling Price (pre-GST)</span><span className="text-sm font-bold text-[#5419b5]">{inr(subtotal)}</span></div>
           </div>
         </Panel>
 

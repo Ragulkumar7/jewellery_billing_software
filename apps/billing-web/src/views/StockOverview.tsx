@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Boxes, Scale, Package, AlertTriangle, ShoppingCart, TrendingUp, History, X } from 'lucide-react';
-import { supabase, inr, type Product, type StockHistory } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
+import { type Product, type StockHistory } from '@/lib/types';
 import { Badge, EmptyState, Panel } from '@/components/ui';
 import { api } from '@/lib/api';
 
@@ -117,7 +118,7 @@ function StockHistoryView({ product, onBack }: { product: Product; onBack: () =>
   const [history, setHistory] = useState<StockHistory[]>([]);
 
   useEffect(() => {
-    supabase.from('stock_history').select('*').eq('product_id', product.id).order('created_at', { ascending: false }).then(({ data }) => setHistory((data as StockHistory[]) || []));
+    api<StockHistory[]>(`/api/products/${product.id}/movements?limit=50`).then(setHistory).catch(() => setHistory([]));
   }, [product.id]);
 
   const movementColor = (type: string) => {

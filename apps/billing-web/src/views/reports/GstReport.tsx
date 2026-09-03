@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ComponentType } from 'react';
 import { Download, Printer, FileText, Percent, TrendingUp, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { api } from '@/lib/api';
-import { inr } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
 import { Panel, EmptyState } from '@/components/ui';
 
 type GstReportResponse = {

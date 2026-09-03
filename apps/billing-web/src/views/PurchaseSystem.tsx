@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Search, Wallet, FileText, TrendingUp, CircleDollarSign, Receipt, X, CheckCircle2, ArrowRight, Ban, Eye } from 'lucide-react';
-import { inr } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
 import { Badge, EmptyState, statusColor } from '@/components/ui';
 import { api } from '@/lib/api';
 

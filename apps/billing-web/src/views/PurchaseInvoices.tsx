@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, Eye, X, FileText, CheckCircle2, Wallet, Ban, AlertTriangle, ChevronDown } from 'lucide-react';
-import { inr, round2, type Product } from '@/lib/supabase';
+import { inr } from '@/lib/currency';
+import { round2 } from '@/lib/math';
+import { type Product } from '@/lib/types';
 import { Badge, EmptyState, statusColor } from '@/components/ui';
 import { api } from '@/lib/api';
 

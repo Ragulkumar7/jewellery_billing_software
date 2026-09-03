@@ -520,6 +520,10 @@ accountsRouter.get("/api/accounts/ledger", authenticate, requirePermission("acco
         select r.id, 'Purchase Return', r.return_number, r.return_date, s.name, r.return_number, 0, r.grand_total::float8,
           'Purchase return from ' || coalesce(s.name, 'Supplier'), r.created_at
         from purchase_returns r left join suppliers s on s.id = r.supplier_id where r.status = 'Approved'
+        union all
+        select r.id, 'Sales Return', r.return_number, r.return_date, r.customer_name, r.return_number, r.grand_total::float8, 0,
+          'Sales return for ' || coalesce(r.customer_name, 'Customer'), r.created_at
+        from sales_returns r where r.status = 'Processed'
       )
       select *, row_number() over () as rn from combined
     `;
